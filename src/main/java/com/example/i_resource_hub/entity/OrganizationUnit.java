@@ -13,7 +13,7 @@ import lombok.*;
 @Builder
 public class OrganizationUnit extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "parent_id")
+    @JoinColumn(name = "parent_id", columnDefinition = "CHAR(36)")
     private OrganizationUnit parent;
 
     @Column(name = "unit_name", nullable = false, length = 100)

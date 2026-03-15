@@ -10,12 +10,13 @@ import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Getter // Tự động sinh hàm getId(), getUnitId(), getDataScope()...
 @AllArgsConstructor // Tự động sinh constructor nạp tất cả biến
 public class CustomUserDetails implements UserDetails {
 
-    private Long id;
+    private String id;
     private String username;
 
     @JsonIgnore
@@ -23,13 +24,15 @@ public class CustomUserDetails implements UserDetails {
 
     private Collection<? extends GrantedAuthority> authorities;
 
-    private Long unitId;
+    private String unitId;
     private String dataScope;
 
     // Hàm build object từ Entity User
     public static CustomUserDetails build(User user) {
-        // Tạm thời fix cứng 1 quyền ROLE_USER (Sau này sẽ query thực tế từ bảng roles)
-        List<GrantedAuthority> authorities = List.of(new SimpleGrantedAuthority("ROLE_USER"));
+
+        List<GrantedAuthority> authorities = user.getRoles().stream()
+                .map(role -> new SimpleGrantedAuthority("ROLE_" + role.getRoleCode()))
+                .collect(Collectors.toList());
 
         // Tạm thời fix cứng data scope là SELF
         String scope = "SELF";

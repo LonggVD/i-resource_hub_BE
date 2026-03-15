@@ -7,6 +7,8 @@ import org.springframework.data.annotation.CreatedBy;
 import org.springframework.data.annotation.LastModifiedBy;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 @Entity
 @Table(name = "users")
@@ -17,10 +19,10 @@ import java.time.LocalDateTime;
 @Builder
 public class User extends BaseEntity {
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "unit_id")
-    private OrganizationUnit unit ;
+    @JoinColumn(name = "unit_id", columnDefinition = "CHAR(36)")
+    private OrganizationUnit unit;
 
-    @Column(name = "student_code", unique = true, nullable = false, length = 20)
+    @Column(name = "student_code", unique = true, length = 20)
     private String studentCode;
 
     @Column(name = "username", unique = true, nullable = false, length = 50)
@@ -47,18 +49,28 @@ public class User extends BaseEntity {
     @Column(name = "last_login_at")
     private LocalDateTime lastLoginAt;
 
-    @Column(name = "failed_login_attempts")
+    @Column(name = "failed_login_attempt")
     private Integer failedLoginAttempts = 0;
 
     @Column(name = "locked_until")
     private LocalDateTime lockedUntil;
 
     @CreatedBy
-    @Column(name = "created_by", updatable = false)
-    private Long createdBy;
+    @Column(name = "created_by", updatable = false, columnDefinition = "CHAR(36)") // Sửa ở đây
+    private String createdBy;
 
     @LastModifiedBy
-    @Column(name = "updated_by")
-    private Long updatedBy;
+    @Column(name = "updated_by", columnDefinition = "CHAR(36)")
+    private String updatedBy;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
+
+    @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(name = "user_roles",
+            joinColumns = @JoinColumn(name = "user_id", columnDefinition = "CHAR(36)"),
+            inverseJoinColumns = @JoinColumn(name = "role_id", columnDefinition = "CHAR(36)"))
+    private Set<Role> roles = new HashSet<>();
 }
+
 

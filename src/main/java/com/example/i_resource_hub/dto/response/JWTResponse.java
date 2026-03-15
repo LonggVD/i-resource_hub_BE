@@ -16,11 +16,11 @@ public class JWTResponse {
     @Builder.Default
     private String type = "Bearer";
 
-    private Long id;
+    private String id;
     private String username;
     private String email;
     private List<String> roles;
 
-    private Long unitId;
+    private String unitId;
     private String dataScope;
 }

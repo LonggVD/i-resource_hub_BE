@@ -16,8 +16,10 @@ import java.time.LocalDateTime;
 public abstract class BaseEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    // Ép kiểu về CHAR(36) để khớp với SQL
+    @Column(name = "id", columnDefinition = "CHAR(36)")
+    private String id;
 
     @Column(name = "is_deleted", nullable = false)
     private boolean isDeleted = false;
@@ -28,8 +30,8 @@ public abstract class BaseEntity {
 
     @LastModifiedDate
     @Column(name = "updated_at")
-    private LocalDateTime updatedAt; // Thời điểm cập nhật cuối cùng
+    private LocalDateTime updatedAt;
 
     @Version
-    private Integer version; // Xử lý đồng thời (Optimistic Locking) [cite: 2, 20]
+    private Integer version;
 }

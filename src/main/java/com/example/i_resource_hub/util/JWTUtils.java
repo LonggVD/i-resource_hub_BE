@@ -63,6 +63,6 @@ public class JWTUtils {
         } catch (JwtException e) {
             System.err.println("Thẻ VIP bị lỗi hoặc đã hết hạn: " + e.getMessage());
         }
-        return false; // Thẻ giả hoặc hết hạn
+        return false;
     }
 }

@@ -1,7 +1,9 @@
 package com.example.i_resource_hub;
 
+import com.example.i_resource_hub.entity.OrganizationUnit;
 import com.example.i_resource_hub.entity.Role;
 import com.example.i_resource_hub.entity.User;
+import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.RoleRepository;
 import com.example.i_resource_hub.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +25,9 @@ public class DataSeeder implements CommandLineRunner {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private OrganizationUnitRepository unitRepository;
+
     @Override
     public void run(String... args) throws Exception {
         // 1. Tạo Roles nếu chưa có
@@ -35,6 +40,26 @@ public class DataSeeder implements CommandLineRunner {
             roleRepository.save(studentRole);
             roleRepository.save(managerRole);
             System.out.println("Đã khởi tạo Roles thành công!");
+        }
+
+        // 2. SEED ĐƠN VỊ / KHOA (ORGANIZATION UNITS)
+        if (unitRepository.count() == 0) {
+            OrganizationUnit cntt = new OrganizationUnit();
+            cntt.setUnitName("Khoa Công nghệ thông tin");
+            cntt.setUnitType("FACULTY"); // Đánh dấu đây là cấp Khoa
+            unitRepository.save(cntt);
+
+            OrganizationUnit coKhi = new OrganizationUnit();
+            coKhi.setUnitName("Khoa Cơ khí");
+            coKhi.setUnitType("FACULTY");
+            unitRepository.save(coKhi);
+
+            OrganizationUnit pdt = new OrganizationUnit();
+            pdt.setUnitName("Phòng Đào tạo");
+            pdt.setUnitType("DEPARTMENT"); // Đánh dấu đây là Phòng ban
+            unitRepository.save(pdt);
+
+            System.out.println("Đã khởi tạo dữ liệu mẫu cho Đơn vị/Khoa thành công!");
         }
 
         // 2. Tạo Admin User nếu chưa có
