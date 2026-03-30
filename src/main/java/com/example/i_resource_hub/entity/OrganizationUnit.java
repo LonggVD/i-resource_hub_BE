@@ -3,6 +3,7 @@ package com.example.i_resource_hub.entity;
 import com.example.i_resource_hub.entity.base.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "organization_units")
@@ -21,4 +22,7 @@ public class OrganizationUnit extends BaseEntity {
 
     @Column(name = "unit_type", nullable = false, length = 50)
     private String unitType;
+
+    @Column(name = "deleted_at")
+    private LocalDateTime deletedAt;
 }

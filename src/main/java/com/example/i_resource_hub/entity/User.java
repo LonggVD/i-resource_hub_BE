@@ -43,7 +43,7 @@ public class User extends BaseEntity {
     @Column(name = "credit_score", nullable = false)
     private Integer creditScore = 100;
 
-    @Column(name = "status", nullable = false)
+    @Column(name = "status", nullable = false, length = 255)
     private String status = "ACTIVE"; // ACTIVE, LOCKED
 
     @Column(name = "last_login_at")
@@ -72,5 +72,3 @@ public class User extends BaseEntity {
             inverseJoinColumns = @JoinColumn(name = "role_id", columnDefinition = "CHAR(36)"))
     private Set<Role> roles = new HashSet<>();
 }
-
-
