@@ -9,7 +9,8 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Collection;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Getter // Tự động sinh hàm getId(), getUnitId(), getDataScope()...
@@ -29,10 +30,19 @@ public class CustomUserDetails implements UserDetails {
 
     // Hàm build object từ Entity User
     public static CustomUserDetails build(User user) {
+        Set<GrantedAuthority> authorities = new HashSet<>();
 
-        List<GrantedAuthority> authorities = user.getRoles().stream()
-                .map(role -> new SimpleGrantedAuthority("ROLE_" + role.getRoleCode()))
-                .collect(Collectors.toList());
+        user.getRoles().forEach(role -> {
+            // Add Role authority (e.g., ROLE_ADMIN)
+            authorities.add(new SimpleGrantedAuthority("ROLE_" + role.getRoleCode()));
+            
+            // Add Permission authorities (e.g., USER_MANAGE)
+            if (role.getPermissions() != null) {
+                role.getPermissions().forEach(permission -> {
+                    authorities.add(new SimpleGrantedAuthority(permission.getPermissionCode()));
+                });
+            }
+        });
 
         // Tạm thời fix cứng data scope là SELF
         String scope = "SELF";
