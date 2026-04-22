@@ -1,7 +1,6 @@
 package com.example.i_resource_hub.service;
 
-import com.example.i_resource_hub.dto.request.LoginRequest;
-import com.example.i_resource_hub.dto.request.SignUpRequest;
+import com.example.i_resource_hub.dto.request.*;
 import com.example.i_resource_hub.dto.response.JWTResponse;
 import com.example.i_resource_hub.entity.OrganizationUnit;
 import com.example.i_resource_hub.entity.Role;
@@ -20,8 +19,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,6 +35,8 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JWTUtils jwtUtils;
+    private final EmailService emailService;
+
     public JWTResponse login(LoginRequest loginRequest) {
         User user = userRepository.findByUsername(loginRequest.getUsername())
                 .orElseThrow(() -> new RuntimeException("Lỗi: Tên đăng nhập hoặc mật khẩu không đúng!"));
@@ -105,7 +108,7 @@ public class AuthService {
 
             user.setStudentCode(request.getStudentCode());
             user.setUnit(null);
-            user.setStatus("ACTIVE");
+            user.setStatus("PENDING");
 
             Role studentRole = roleRepository.findByRoleCode("STUDENT")
                     .orElseThrow(() -> new RuntimeException("Lỗi: Không tìm thấy quyền STUDENT"));
@@ -136,5 +139,54 @@ public class AuthService {
         } else {
             throw new RuntimeException("Loại tài khoản không hợp lệ!");
         }
+    }
+
+    @Transactional
+    public void forgotPassword(ForgotPasswordRequest request) {
+        User user = userRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new RuntimeException("Lỗi: Không tìm thấy người dùng với email này!"));
+
+        String resetCode = String.format("%06d", new Random().nextInt(999999));
+        user.setResetCode(resetCode);
+        user.setResetCodeExpiry(LocalDateTime.now().plusMinutes(5));
+        userRepository.save(user);
+
+        try {
+            emailService.sendResetPasswordEmail(user.getEmail(), resetCode);
+        } catch (Exception e) {
+            throw new RuntimeException("Lỗi: Không thể gửi email khôi phục mật khẩu!");
+        }
+    }
+
+    public void verifyResetCode(VerifyResetCodeRequest request) {
+        User user = userRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new RuntimeException("Lỗi: Không tìm thấy người dùng với email này!"));
+
+        if (user.getResetCode() == null || !user.getResetCode().equals(request.getCode())) {
+            throw new RuntimeException("Lỗi: Mã xác nhận không chính xác!");
+        }
+
+        if (user.getResetCodeExpiry().isBefore(LocalDateTime.now())) {
+            throw new RuntimeException("Lỗi: Mã xác nhận đã hết hạn!");
+        }
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        User user = userRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new RuntimeException("Lỗi: Không tìm thấy người dùng với email này!"));
+
+        if (user.getResetCode() == null || !user.getResetCode().equals(request.getCode())) {
+            throw new RuntimeException("Lỗi: Mã xác nhận không chính xác!");
+        }
+
+        if (user.getResetCodeExpiry().isBefore(LocalDateTime.now())) {
+            throw new RuntimeException("Lỗi: Mã xác nhận đã hết hạn!");
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setResetCode(null);
+        user.setResetCodeExpiry(null);
+        userRepository.save(user);
     }
 }

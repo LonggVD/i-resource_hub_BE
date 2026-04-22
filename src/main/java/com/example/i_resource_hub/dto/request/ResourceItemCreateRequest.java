@@ -23,4 +23,5 @@ public class ResourceItemCreateRequest {
     private LocalDate warrantyExpiry;
     private String conditionStatus;
     private String status;
+    private String unitId;
 }

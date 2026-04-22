@@ -21,7 +21,12 @@ import java.util.HashSet;
 import java.util.Set;
 
 @Entity
-@Table(name = "bookings")
+@Table(name = "bookings", uniqueConstraints = {
+    @jakarta.persistence.UniqueConstraint(
+        name = "uk_booking_item_date_slot",
+        columnNames = {"resource_item_id", "booking_date", "slot_id"}
+    )
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -82,9 +87,6 @@ public class Booking extends BaseEntity {
     private Integer activeFlag;
 
     @ManyToMany(fetch = FetchType.LAZY)
-    @JoinTable(name = "booking_participants",
-            joinColumns = @JoinColumn(name = "booking_id", columnDefinition = "CHAR(36)"),
-            inverseJoinColumns = @JoinColumn(name = "user_id", columnDefinition = "CHAR(36)"))
+    @JoinTable(name = "booking_participants", joinColumns = @JoinColumn(name = "booking_id", columnDefinition = "CHAR(36)"), inverseJoinColumns = @JoinColumn(name = "user_id", columnDefinition = "CHAR(36)"))
     private Set<User> participants = new HashSet<>();
 }
-

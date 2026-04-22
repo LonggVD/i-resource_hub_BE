@@ -12,8 +12,10 @@ import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.RoleRepository;
 import com.example.i_resource_hub.repository.UserRepository;
 import com.example.i_resource_hub.repository.specification.UserSpecification;
+import jakarta.mail.MessagingException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
@@ -29,12 +31,14 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class UserService {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final OrganizationUnitRepository unitRepository;
     private final PasswordEncoder passwordEncoder;
+    private final EmailService emailService;
 
     @Transactional(readOnly = true)
     public Page<UserResponse> getPageUsers(String keyword, String unitId, String status, String roleId, Pageable pageable) {
@@ -131,6 +135,38 @@ public class UserService {
         }
         
         return mapToUserResponse(userRepository.save(user));
+    }
+
+    @Transactional
+    public UserResponse approveUser(String id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
+        user.setStatus("ACTIVE");
+        User savedUser = userRepository.save(user);
+
+        try {
+            emailService.sendApprovalEmail(user.getEmail(), user.getFullName());
+        } catch (MessagingException e) {
+            log.error("Lỗi khi gửi mail phê duyệt cho {}: {}", user.getEmail(), e.getMessage());
+        }
+
+        return mapToUserResponse(savedUser);
+    }
+
+    @Transactional
+    public UserResponse rejectUser(String id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
+        user.setStatus("REJECTED");
+        User savedUser = userRepository.save(user);
+
+        try {
+            emailService.sendRejectionEmail(user.getEmail(), user.getFullName());
+        } catch (MessagingException e) {
+            log.error("Lỗi khi gửi mail từ chối cho {}: {}", user.getEmail(), e.getMessage());
+        }
+
+        return mapToUserResponse(savedUser);
     }
 
     @Transactional

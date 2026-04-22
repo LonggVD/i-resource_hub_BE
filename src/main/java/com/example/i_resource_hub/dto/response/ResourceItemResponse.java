@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 public class ResourceItemResponse {
     private String id;
     private TemplateSummary template;
+    private UnitSummary unit;
     private String serialNumber;
     private LocalDate purchaseDate;
     private LocalDate warrantyExpiry;
@@ -31,5 +32,14 @@ public class ResourceItemResponse {
         private String id;
         private String name;
         private String imageUrl;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class UnitSummary {
+        private String id;
+        private String unitName;
     }
 }

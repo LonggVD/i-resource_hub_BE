@@ -39,4 +39,3 @@ public class BookingHistory extends BaseEntity {
     @Column(name = "reason", columnDefinition = "TEXT")
     private String reason;
 }
-

@@ -22,4 +22,5 @@ public class ResourceItemBatchCreateRequest {
 
     private String conditionStatus;
     private String status;
+    private String unitId;
 }

@@ -6,6 +6,7 @@ import com.example.i_resource_hub.dto.request.ResourceItemUpdateRequest;
 import com.example.i_resource_hub.dto.response.ResourceItemResponse;
 import com.example.i_resource_hub.entity.ResourceItem;
 import com.example.i_resource_hub.entity.ResourceTemplate;
+import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.ResourceItemRepository;
 import com.example.i_resource_hub.repository.ResourceTemplateRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -24,6 +25,7 @@ public class ResourceItemService {
 
     private final ResourceItemRepository resourceItemRepository;
     private final ResourceTemplateRepository resourceTemplateRepository;
+    private final OrganizationUnitRepository organizationUnitRepository;
 
     @Transactional(readOnly = true)
     public List<ResourceItemResponse> getAllActive() {
@@ -64,6 +66,10 @@ public class ResourceItemService {
                 .status(request.getStatus() != null ? request.getStatus() : "AVAILABLE")
                 .build();
 
+        if (request.getUnitId() != null) {
+            item.setManagedByUnit(organizationUnitRepository.findById(request.getUnitId()).orElse(null));
+        }
+
         return mapToResponse(resourceItemRepository.save(item));
     }
 
@@ -84,6 +90,10 @@ public class ResourceItemService {
                     .conditionStatus(request.getConditionStatus() != null ? request.getConditionStatus() : "GOOD")
                     .status(request.getStatus() != null ? request.getStatus() : "AVAILABLE")
                     .build();
+
+            if (request.getUnitId() != null) {
+                item.setManagedByUnit(organizationUnitRepository.findById(request.getUnitId()).orElse(null));
+            }
             items.add(item);
         }
 
@@ -139,9 +149,18 @@ public class ResourceItemService {
                     .build();
         }
 
+        ResourceItemResponse.UnitSummary unitSummary = null;
+        if (item.getManagedByUnit() != null) {
+            unitSummary = ResourceItemResponse.UnitSummary.builder()
+                    .id(item.getManagedByUnit().getId())
+                    .unitName(item.getManagedByUnit().getUnitName())
+                    .build();
+        }
+
         return ResourceItemResponse.builder()
                 .id(item.getId())
                 .template(templateSummary)
+                .unit(unitSummary)
                 .serialNumber(item.getSerialNumber())
                 .purchaseDate(item.getPurchaseDate())
                 .warrantyExpiry(item.getWarrantyExpiry())

@@ -35,7 +35,8 @@ public class OrganizationUnitController {
 
     @PostMapping
     @Operation(summary = "Create Unit", description = "Tạo một tổ chức mới ")
-    public ResponseEntity<OrganizationUnitResponse> createUnit(@Valid @RequestBody OrganizationUnitCreateRequest request) {
+    public ResponseEntity<OrganizationUnitResponse> createUnit(
+            @Valid @RequestBody OrganizationUnitCreateRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(organizationUnitService.createUnit(request));
     }
 
@@ -43,8 +44,7 @@ public class OrganizationUnitController {
     @Operation(summary = "Update Unit", description = "Thay đổi thông tin tổ chức ")
     public ResponseEntity<OrganizationUnitResponse> updateUnit(
             @PathVariable String id,
-            @Valid @RequestBody OrganizationUnitUpdateRequest request
-    ) {
+            @Valid @RequestBody OrganizationUnitUpdateRequest request) {
         return ResponseEntity.ok(organizationUnitService.updateUnit(id, request));
     }
 

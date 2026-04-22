@@ -58,6 +58,18 @@ public class UserController {
         return ResponseEntity.ok(userService.toggleStatus(id));
     }
 
+    @PatchMapping("/{id}/approve")
+    @PreAuthorize("hasAuthority('USER_MANAGE')")
+    public ResponseEntity<UserResponse> approveUser(@PathVariable String id) {
+        return ResponseEntity.ok(userService.approveUser(id));
+    }
+
+    @PatchMapping("/{id}/reject")
+    @PreAuthorize("hasAuthority('USER_MANAGE')")
+    public ResponseEntity<UserResponse> rejectUser(@PathVariable String id) {
+        return ResponseEntity.ok(userService.rejectUser(id));
+    }
+
     @PostMapping("/{id}/reset-password")
     @PreAuthorize("hasAuthority('USER_MANAGE')")
     public ResponseEntity<Map<String, String>> resetPassword(@PathVariable String id) {

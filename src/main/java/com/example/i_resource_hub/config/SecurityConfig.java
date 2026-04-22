@@ -2,6 +2,7 @@ package com.example.i_resource_hub.config;
 
 import com.example.i_resource_hub.security.jwt.AuthEntryPointJWT;
 import com.example.i_resource_hub.security.jwt.JWTAuthFilter;
+import org.springframework.http.HttpMethod;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -44,6 +45,10 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/organization-units").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/time-slots").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/files/upload").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/files/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .anyRequest().authenticated()
                 );

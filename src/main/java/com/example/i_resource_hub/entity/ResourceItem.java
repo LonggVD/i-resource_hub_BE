@@ -40,6 +40,10 @@ public class ResourceItem extends BaseEntity {
     @Column(name = "condition_status", length = 20)
     private String conditionStatus = "GOOD";
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "unit_id", columnDefinition = "CHAR(36)")
+    private OrganizationUnit managedByUnit;
+
     @Column(name = "status", length = 20)
     private String status = "AVAILABLE";
 }
