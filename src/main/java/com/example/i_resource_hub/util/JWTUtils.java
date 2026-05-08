@@ -4,6 +4,7 @@ import com.example.i_resource_hub.security.CustomUserDetails;
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 
@@ -15,12 +16,11 @@ import java.util.Map;
 @Component
 public class JWTUtils {
 
-    // 1. Chữ ký bí mật (Secret Key) - Máy chủ dùng cái này để đóng dấu mộc đỏ.
-    // Lưu ý: Chuỗi này phải đủ dài (trên 256 bit). Đừng đưa cho ai biết nhé!
-    private final String jwtSecret = "DayLaMotChuoiBiMatRatDaiVaKhoDoanChoHeThongCuaBan1234567890";
+    @Value("${jwt.secret}")
+    private String jwtSecret;
 
-    // 2. Thời gian sống của thẻ VIP: 24 giờ (tính bằng milliseconds)
-    private final int jwtExpirationMs = 86400000;
+    @Value("${jwt.expiration:86400000}")
+    private int jwtExpirationMs;
 
     // --- HÀM 1: IN THẺ (Tạo Token khi đăng nhập thành công) ---
     public String generateJwtToken(Authentication authentication) {

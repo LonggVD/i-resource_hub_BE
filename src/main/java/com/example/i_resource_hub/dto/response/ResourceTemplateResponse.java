@@ -17,6 +17,8 @@ public class ResourceTemplateResponse {
     private String imageUrl;
     private CategorySummary category;
     private OrganizationUnitSummary unit;
+    private Integer totalQuantity;
+    private Integer availableQuantity;
     @Getter
     @Setter
     @Builder

@@ -17,7 +17,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/resource-items")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*", maxAge = 3600)
 public class ResourceItemController {
 
     private final ResourceItemService resourceItemService;
@@ -26,6 +25,17 @@ public class ResourceItemController {
     @PreAuthorize("hasAuthority('RESOURCE_VIEW')")
     public ResponseEntity<List<ResourceItemResponse>> getAllActive() {
         return ResponseEntity.ok(resourceItemService.getAllActive());
+    }
+
+    @GetMapping("/filter")
+    @PreAuthorize("hasAuthority('RESOURCE_VIEW')")
+    public ResponseEntity<List<ResourceItemResponse>> filter(
+            @RequestParam(required = false) String templateId,
+            @RequestParam(required = false) String unitId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String conditionStatus,
+            @RequestParam(required = false) String keyword) {
+        return ResponseEntity.ok(resourceItemService.filter(templateId, unitId, status, conditionStatus, keyword));
     }
 
     @GetMapping("/{id}")

@@ -26,14 +26,25 @@ public class BookingEvidence extends BaseEntity {
     @JoinColumn(name = "booking_id", columnDefinition = "CHAR(36)")
     private Booking booking;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "resource_item_id", columnDefinition = "CHAR(36)")
+    private ResourceItem resourceItem;
+
     @Column(name = "evidence_type", length = 20)
     private String evidenceType;
 
-    @Column(name = "image_url", nullable = false, length = 255)
+    @Column(name = "image_url", nullable = false, columnDefinition = "TEXT")
     private String imageUrl;
 
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
+
+    @Column(name = "resolution", columnDefinition = "TEXT")
+    private String resolution;
+
+    @Column(name = "is_resolved")
+    @Builder.Default
+    private Boolean isResolved = false;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by", columnDefinition = "CHAR(36)")

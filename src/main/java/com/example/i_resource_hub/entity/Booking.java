@@ -8,6 +8,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinTable;
 import jakarta.persistence.ManyToMany;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -17,7 +18,9 @@ import lombok.Setter;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Entity
@@ -86,7 +89,29 @@ public class Booking extends BaseEntity {
     @Column(name = "active_flag", insertable = false, updatable = false)
     private Integer activeFlag;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "managed_by_unit", columnDefinition = "CHAR(36)")
+    private OrganizationUnit managedByUnit;
+
+    @Column(name = "batch_token")
+    private String batchToken;
+
+    @Column(name = "has_damage")
+    @Builder.Default
+    private Boolean hasDamage = false;
+
+    @Column(name = "damage_description", columnDefinition = "TEXT")
+    private String damageDescription;
+
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(name = "booking_participants", joinColumns = @JoinColumn(name = "booking_id", columnDefinition = "CHAR(36)"), inverseJoinColumns = @JoinColumn(name = "user_id", columnDefinition = "CHAR(36)"))
     private Set<User> participants = new HashSet<>();
+
+    @OneToMany(mappedBy = "booking", fetch = FetchType.LAZY)
+    @Builder.Default
+    private List<BookingEvidence> evidences = new ArrayList<>();
+
+    @OneToMany(mappedBy = "booking", fetch = FetchType.LAZY)
+    @Builder.Default
+    private List<Penalty> penalties = new ArrayList<>();
 }

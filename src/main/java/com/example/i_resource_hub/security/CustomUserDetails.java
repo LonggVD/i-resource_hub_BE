@@ -2,7 +2,6 @@ package com.example.i_resource_hub.security;
 
 import com.example.i_resource_hub.entity.User;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -11,10 +10,8 @@ import org.springframework.security.core.userdetails.UserDetails;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.stream.Collectors;
 
-@Getter // Tự động sinh hàm getId(), getUnitId(), getDataScope()...
-@AllArgsConstructor // Tự động sinh constructor nạp tất cả biến
+@Getter
 public class CustomUserDetails implements UserDetails {
 
     private String id;
@@ -27,16 +24,25 @@ public class CustomUserDetails implements UserDetails {
 
     private String unitId;
     private String dataScope;
+    private Integer creditScore;
 
-    // Hàm build object từ Entity User
+    public CustomUserDetails(String id, String username, String password, 
+                             Collection<? extends GrantedAuthority> authorities, 
+                             String unitId, String dataScope, Integer creditScore) {
+        this.id = id;
+        this.username = username;
+        this.password = password;
+        this.authorities = authorities;
+        this.unitId = unitId;
+        this.dataScope = dataScope;
+        this.creditScore = creditScore;
+    }
+
     public static CustomUserDetails build(User user) {
         Set<GrantedAuthority> authorities = new HashSet<>();
 
         user.getRoles().forEach(role -> {
-            // Add Role authority (e.g., ROLE_ADMIN)
             authorities.add(new SimpleGrantedAuthority("ROLE_" + role.getRoleCode()));
-            
-            // Add Permission authorities (e.g., USER_MANAGE)
             if (role.getPermissions() != null) {
                 role.getPermissions().forEach(permission -> {
                     authorities.add(new SimpleGrantedAuthority(permission.getPermissionCode()));
@@ -44,7 +50,6 @@ public class CustomUserDetails implements UserDetails {
             }
         });
 
-        // Tạm thời fix cứng data scope là SELF
         String scope = "SELF";
 
         return new CustomUserDetails(
@@ -53,11 +58,10 @@ public class CustomUserDetails implements UserDetails {
                 user.getPassword(),
                 authorities,
                 user.getUnit() != null ? user.getUnit().getId() : null,
-                scope
+                scope,
+                user.getCreditScore()
         );
     }
-
-    // --- SỬA LẠI CÁC HÀM OVERRIDE ĐỂ TRẢ VỀ ĐÚNG BIẾN THẬT ---
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
@@ -79,8 +83,6 @@ public class CustomUserDetails implements UserDetails {
         return true;
     }
 
-    // Mẹo: Sau này bạn có thể check status của User ở đây
-    // return user.getStatus().equals("ACTIVE");
     @Override
     public boolean isAccountNonLocked() {
         return true;

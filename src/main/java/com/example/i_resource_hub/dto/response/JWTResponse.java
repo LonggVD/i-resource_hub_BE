@@ -23,4 +23,5 @@ public class JWTResponse {
 
     private String unitId;
     private String dataScope;
+    private Integer creditScore;
 }

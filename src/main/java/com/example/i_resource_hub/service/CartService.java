@@ -6,6 +6,7 @@ import com.example.i_resource_hub.entity.ResourceTemplate;
 import com.example.i_resource_hub.entity.TimeSlot;
 import com.example.i_resource_hub.entity.User;
 import com.example.i_resource_hub.repository.CartItemRepository;
+import com.example.i_resource_hub.repository.ResourceItemRepository;
 import com.example.i_resource_hub.repository.ResourceTemplateRepository;
 import com.example.i_resource_hub.repository.TimeSlotRepository;
 import com.example.i_resource_hub.repository.UserRepository;
@@ -26,6 +27,7 @@ public class CartService {
     private final ResourceTemplateRepository resourceTemplateRepository;
     private final TimeSlotRepository timeSlotRepository;
     private final UserRepository userRepository;
+    private final ResourceItemRepository resourceItemRepository;
 
     private User getCurrentUser() {
         String username = SecurityContextHolder.getContext().getAuthentication().getName();
@@ -49,26 +51,27 @@ public class CartService {
 
         cartItemRepository.findByUser_IdAndResourceTemplate_Id(user.getId(), templateId)
                 .ifPresentOrElse(
-                    item -> item.setQuantity(item.getQuantity() + quantity),
-                    () -> {
-                        CartItem newItem = CartItem.builder()
-                                .user(user)
-                                .resourceTemplate(template)
-                                .quantity(quantity)
-                                .bookingDate(LocalDate.now())
-                                .build();
-                        cartItemRepository.save(newItem);
-                    }
-                );
+                        item -> item.setQuantity(item.getQuantity() + quantity),
+                        () -> {
+                            CartItem newItem = CartItem.builder()
+                                    .user(user)
+                                    .resourceTemplate(template)
+                                    .quantity(quantity)
+                                    .bookingDate(LocalDate.now())
+                                    .build();
+                            cartItemRepository.save(newItem);
+                        });
     }
 
     @Transactional
     public void updateCartItem(String itemId, Integer quantity, LocalDate date, String slotId) {
         CartItem item = cartItemRepository.findById(itemId)
                 .orElseThrow(() -> new RuntimeException("Cart item not found"));
-        
-        if (quantity != null) item.setQuantity(quantity);
-        if (date != null) item.setBookingDate(date);
+
+        if (quantity != null)
+            item.setQuantity(quantity);
+        if (date != null)
+            item.setBookingDate(date);
         if (slotId != null) {
             TimeSlot slot = timeSlotRepository.findById(slotId).orElse(null);
             item.setSlot(slot);
@@ -93,7 +96,13 @@ public class CartService {
                 .resourceTemplateId(item.getResourceTemplate().getId())
                 .resourceName(item.getResourceTemplate().getName())
                 .imageUrl(item.getResourceTemplate().getImageUrl())
-                .unitName(item.getResourceTemplate().getUnit() != null ? item.getResourceTemplate().getUnit().getUnitName() : "")
+                .totalQuantity((int) resourceItemRepository
+                        .countByTemplate_IdAndIsDeletedFalse(item.getResourceTemplate().getId()))
+                .availableQuantity((int) resourceItemRepository
+                        .countByTemplate_IdAndIsDeletedFalseAndStatus(item.getResourceTemplate().getId(), "AVAILABLE"))
+                .unitName(item.getResourceTemplate().getUnit() != null
+                        ? item.getResourceTemplate().getUnit().getUnitName()
+                        : "")
                 .quantity(item.getQuantity())
                 .bookingDate(item.getBookingDate())
                 .slotId(item.getSlot() != null ? item.getSlot().getId() : null)

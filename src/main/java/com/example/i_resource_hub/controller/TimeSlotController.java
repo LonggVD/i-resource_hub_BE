@@ -24,9 +24,9 @@ import java.util.List;
  * │ TimeSlot đại diện cho một "khung giờ mượn" trong ngày.   │
  * │                                                          │
  * │ Ví dụ thực tế:                                           │
- * │   Ca 1: 07:00 – 09:15 (Thứ Hai → Thứ Sáu)              │
- * │   Ca 2: 09:30 – 11:45 (Thứ Hai → Thứ Sáu)              │
- * │   Ca 3: 13:00 – 15:15 (tất cả các ngày)                 │
+ * │   Ca 1: 07:00 – 09:15 (Thứ Hai → Thứ Sáu)                │
+ * │   Ca 2: 09:30 – 11:45 (Thứ Hai → Thứ Sáu)                │
+ * │   Ca 3: 13:00 – 15:15 (tất cả các ngày)                  │
  * │                                                          │
  * │ Luồng sử dụng:                                           │
  * │  1. ADMIN tạo các TimeSlot (POST /api/time-slots)        │

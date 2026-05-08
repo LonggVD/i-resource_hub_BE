@@ -47,6 +47,14 @@ public class UserService {
     }
 
     @Transactional(readOnly = true)
+    public Page<UserResponse> getStudents(String keyword, Pageable pageable) {
+        Role studentRole = roleRepository.findByRoleCode("STUDENT")
+                .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy vai trò sinh viên"));
+        Specification<User> spec = UserSpecification.filterUsers(keyword, null, "ACTIVE", studentRole.getId());
+        return userRepository.findAll(spec, pageable).map(this::mapToUserResponse);
+    }
+
+    @Transactional(readOnly = true)
     public UserResponse getUserById(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng với ID: " + id));

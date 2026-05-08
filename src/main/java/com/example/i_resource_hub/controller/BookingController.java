@@ -41,7 +41,6 @@ public class BookingController {
     @GetMapping("/kanban")
     @PreAuthorize("hasAuthority('BOOKING_APPROVE')")
     public ResponseEntity<List<BookingResponse>> getKanbanBookings() {
-        System.out.println(bookingService.getKanbanBookings());
         return ResponseEntity.ok(bookingService.getKanbanBookings());
     }
 
@@ -76,6 +75,20 @@ public class BookingController {
     }
 
     /**
+     * Kiểm tra số lượng thiết bị khả dụng
+     */
+    @Operation(summary = "Kiểm tra số lượng khả dụng", description = "Lấy số lượng thiết bị có thể mượn cho một mẫu, ngày và khung giờ cụ thể")
+    @GetMapping("/availability")
+    @PreAuthorize("hasAuthority('BOOKING_CREATE')")
+    public ResponseEntity<Integer> checkAvailability(
+            @RequestParam String templateId,
+            @RequestParam String date,
+            @RequestParam String slotId) {
+        java.time.LocalDate localDate = java.time.LocalDate.parse(date);
+        return ResponseEntity.ok(bookingService.getAvailableQuantity(templateId, localDate, slotId));
+    }
+
+    /**
      * Giáo vụ duyệt / từ chối
      */
     @Operation(summary = "Phê duyệt hoặc Từ chối đơn mượn", description = "Dành cho giáo vụ xử lý các đơn mượn đang PENDING (Quyền: BOOKING_APPROVE)")
@@ -86,6 +99,15 @@ public class BookingController {
             @Valid @RequestBody ActionRequest request) {
         bookingService.processAction(id, request);
         return ResponseEntity.ok("Xử lý đơn thành công");
+    }
+
+    @PutMapping("/process-bulk")
+    @PreAuthorize("hasAuthority('BOOKING_APPROVE')")
+    public ResponseEntity<String> processBulkAction(
+            @RequestParam List<String> ids,
+            @Valid @RequestBody ActionRequest request) {
+        bookingService.processBulkAction(ids, request);
+        return ResponseEntity.ok("Xử lý hàng loạt thành công");
     }
 
     /**
@@ -107,9 +129,24 @@ public class BookingController {
     @PostMapping("/check-in")
     @PreAuthorize("hasAnyAuthority('INVENTORY_CHECKIN', 'BOOKING_APPROVE')")
     public ResponseEntity<String> checkIn(
-            @Parameter(description = "Token UUID lấy từ mã QR") @RequestParam String token) {
-        bookingService.checkIn(token);
+            @Parameter(description = "Token UUID lấy từ mã QR") @RequestParam String token,
+            @Parameter(description = "Mã Serial thiết bị thực tế bàn giao (nếu muốn đổi máy)") @RequestParam(required = false) String newSerialNumber) {
+        bookingService.checkIn(token, newSerialNumber);
         return ResponseEntity.ok("Bàn giao thiết bị thành công");
+    }
+
+    @PostMapping("/check-in/bulk-auto")
+    @PreAuthorize("hasAnyAuthority('INVENTORY_CHECKIN', 'BOOKING_APPROVE')")
+    public ResponseEntity<String> checkInBulkAuto(@RequestBody List<String> bookingIds) {
+        bookingService.checkInBulkAuto(bookingIds);
+        return ResponseEntity.ok("Bàn giao hàng loạt (Tự động) thành công");
+    }
+
+    @PostMapping("/check-in/bulk-manual")
+    @PreAuthorize("hasAnyAuthority('INVENTORY_CHECKIN', 'BOOKING_APPROVE')")
+    public ResponseEntity<String> checkInBulkManual(@RequestBody com.example.i_resource_hub.dto.request.BulkCheckInRequest request) {
+        bookingService.checkInBulkManual(request);
+        return ResponseEntity.ok("Bàn giao hàng loạt (Thủ công) thành công");
     }
 
     /**
@@ -131,5 +168,19 @@ public class BookingController {
     public ResponseEntity<String> addEvidence(@Valid @RequestBody EvidenceRequest request) {
         bookingService.addEvidence(request);
         return ResponseEntity.ok("Thêm minh chứng thành công");
+    }
+
+    @Operation(summary = "Lấy thông tin lô hàng từ mã QR", description = "Dùng để định danh nhanh đơn mượn khi sinh viên đến trả đồ")
+    @GetMapping("/by-token/{token}/batch")
+    public ResponseEntity<List<BookingResponse>> getBatchByToken(@PathVariable String token) {
+        return ResponseEntity.ok(bookingService.getBatchByQrToken(token));
+    }
+
+    @Operation(summary = "Trả đồ hàng loạt", description = "Xác nhận trả nhiều thiết bị trong một lô")
+    @PostMapping("/return-bulk")
+    @PreAuthorize("hasAnyAuthority('INVENTORY_CHECKOUT', 'BOOKING_APPROVE')")
+    public ResponseEntity<String> returnBulk(@RequestBody com.example.i_resource_hub.dto.request.BulkReturnRequest request) {
+        bookingService.returnBulk(request);
+        return ResponseEntity.ok("Xác nhận trả đồ thành công");
     }
 }

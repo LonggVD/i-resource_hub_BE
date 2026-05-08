@@ -37,7 +37,7 @@ public class TimeSlotService {
      */
     @Transactional(readOnly = true)
     public List<TimeSlotResponse> getAllTimeSlots() {
-        return timeSlotRepository.findAll().stream()
+        return timeSlotRepository.findByIsDeletedFalse().stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -48,7 +48,7 @@ public class TimeSlotService {
      */
     @Transactional(readOnly = true)
     public List<TimeSlotResponse> getSlotsByDay(Integer dayOfWeek) {
-        return timeSlotRepository.findByDayOfWeek(dayOfWeek).stream()
+        return timeSlotRepository.findByDayOfWeekAndIsDeletedFalse(dayOfWeek).stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -58,7 +58,7 @@ public class TimeSlotService {
      */
     @Transactional(readOnly = true)
     public List<TimeSlotResponse> getCommonSlots() {
-        return timeSlotRepository.findByDayOfWeekIsNull().stream()
+        return timeSlotRepository.findByDayOfWeekIsNullAndIsDeletedFalse().stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -80,9 +80,10 @@ public class TimeSlotService {
      */
     @Transactional
     public TimeSlotResponse create(TimeSlotRequest request) {
-        if (timeSlotRepository.existsBySlotName(request.getSlotName())) {
+        if (timeSlotRepository.existsBySlotNameAndIsDeletedFalse(request.getSlotName())) {
             throw new RuntimeException("Tên khung giờ \"" + request.getSlotName() + "\" đã tồn tại!");
         }
+
         TimeSlot slot = TimeSlot.builder()
                 .slotName(request.getSlotName())
                 .startTime(request.getStartTime())
@@ -102,7 +103,7 @@ public class TimeSlotService {
 
         // Kiểm tra tên mới có trùng với ca khác không
         if (!slot.getSlotName().equals(request.getSlotName())
-                && timeSlotRepository.existsBySlotName(request.getSlotName())) {
+                && timeSlotRepository.existsBySlotNameAndIsDeletedFalse(request.getSlotName())) {
             throw new RuntimeException("Tên khung giờ \"" + request.getSlotName() + "\" đã được sử dụng!");
         }
 
@@ -110,6 +111,7 @@ public class TimeSlotService {
         slot.setStartTime(request.getStartTime());
         slot.setEndTime(request.getEndTime());
         slot.setDayOfWeek(request.getDayOfWeek());
+
         return mapToResponse(timeSlotRepository.save(slot));
     }
 

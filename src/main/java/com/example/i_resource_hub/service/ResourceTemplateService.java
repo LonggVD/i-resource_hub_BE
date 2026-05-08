@@ -1,4 +1,5 @@
 package com.example.i_resource_hub.service;
+
 import com.example.i_resource_hub.dto.request.ResourceTemplateCreateRequest;
 import com.example.i_resource_hub.dto.request.ResourceTemplateUpdateRequest;
 import com.example.i_resource_hub.dto.response.ResourceTemplateResponse;
@@ -10,12 +11,15 @@ import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.ResourceTemplateRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -23,23 +27,28 @@ public class ResourceTemplateService {
     private final ResourceTemplateRepository resourceTemplateRepository;
     private final CategoryRepository categoryRepository;
     private final OrganizationUnitRepository organizationUnitRepository;
+    private final com.example.i_resource_hub.repository.ResourceItemRepository resourceItemRepository;
+
     public List<ResourceTemplateResponse> getAllActive() {
         return resourceTemplateRepository.findAllByIsDeletedFalse()
                 .stream()
                 .map(this::toResponse)
                 .toList();
     }
+
     public List<ResourceTemplateResponse> getAllDeleted() {
         return resourceTemplateRepository.findAllByIsDeletedTrue()
                 .stream()
                 .map(this::toResponse)
                 .toList();
     }
+
     public ResourceTemplateResponse getById(String id) {
         ResourceTemplate template = resourceTemplateRepository.findByIdAndIsDeletedFalse(id)
                 .orElseThrow(() -> new EntityNotFoundException("Resource template not found with id: " + id));
         return toResponse(template);
     }
+
     @Transactional
     public ResourceTemplateResponse create(ResourceTemplateCreateRequest request) {
         Category category = resolveCategory(request.getCategoryId());
@@ -54,6 +63,7 @@ public class ResourceTemplateService {
                 .build();
         return toResponse(resourceTemplateRepository.save(template));
     }
+
     @Transactional
     public ResourceTemplateResponse update(String id, ResourceTemplateUpdateRequest request) {
         ResourceTemplate template = resourceTemplateRepository.findByIdAndIsDeletedFalse(id)
@@ -66,6 +76,7 @@ public class ResourceTemplateService {
         template.setUnit(resolveUnit(request.getUnitId()));
         return toResponse(resourceTemplateRepository.save(template));
     }
+
     @Transactional
     public void softDelete(String id) {
         ResourceTemplate template = resourceTemplateRepository.findByIdAndIsDeletedFalse(id)
@@ -73,6 +84,7 @@ public class ResourceTemplateService {
         template.setDeleted(true);
         resourceTemplateRepository.save(template);
     }
+
     @Transactional
     public void restore(String id) {
         ResourceTemplate template = resourceTemplateRepository.findByIdAndIsDeletedTrue(id)
@@ -80,6 +92,7 @@ public class ResourceTemplateService {
         template.setDeleted(false);
         resourceTemplateRepository.save(template);
     }
+
     private Category resolveCategory(String categoryId) {
         if (categoryId == null || categoryId.isBlank()) {
             return null;
@@ -91,6 +104,7 @@ public class ResourceTemplateService {
         }
         return category;
     }
+
     private OrganizationUnit resolveUnit(String unitId) {
         if (unitId == null || unitId.isBlank()) {
             return null;
@@ -102,6 +116,7 @@ public class ResourceTemplateService {
         }
         return unit;
     }
+
     private ResourceTemplateResponse toResponse(ResourceTemplate template) {
         ResourceTemplateResponse.CategorySummary categorySummary = null;
         if (template.getCategory() != null) {
@@ -125,16 +140,20 @@ public class ResourceTemplateService {
                 .imageUrl(template.getImageUrl())
                 .category(categorySummary)
                 .unit(unitSummary)
+                .totalQuantity((int) resourceItemRepository.countByTemplate_IdAndIsDeletedFalse(template.getId()))
+                .availableQuantity((int) resourceItemRepository
+                        .countByTemplate_IdAndIsDeletedFalseAndStatus(template.getId(), "AVAILABLE"))
                 .build();
+
     }
 
-    //càidđặt xoá cứng khỏi DB
+    // càidđặt xoá cứng khỏi DB
     @Scheduled(cron = "0 0 2 * * ?")
     @Transactional
     public void permanentlyDeleteSoftDeletedRT() {
-        System.out.println("Bắt đầu quá trình xoá cứng các danh mục đã bị xóa mềm...");
+        log.info("Bắt đầu quá trình xoá cứng các danh mục đã bị xóa mềm...");
         LocalDateTime twoMonthsAgo = LocalDateTime.now().minusMonths(2);
         resourceTemplateRepository.deleteRTOldRecords(twoMonthsAgo);
-        System.out.println("Đã hoàn thành quá trình xoá cứng các danh mục đã bị xóa mềm!");
+        log.info("Đã hoàn thành quá trình xoá cứng các danh mục đã bị xóa mềm!");
     }
 }

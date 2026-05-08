@@ -72,6 +72,7 @@ public class AuthService {
                     .roles(roles)
                     .unitId(userDetails.getUnitId())
                     .dataScope(userDetails.getDataScope())
+                    .creditScore(userDetails.getCreditScore())
                     .build();
 
         } catch (Exception e) {

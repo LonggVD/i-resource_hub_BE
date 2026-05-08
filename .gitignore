@@ -31,3 +31,16 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### JVM crash logs ###
+hs_err_pid*.log
+replay_pid*.log
+
+### Local secrets / overrides ###
+.env
+.env.local
+application-local.properties
+src/main/resources/application-local.properties
+
+### Uploaded user content (do not commit) ###
+uploads/

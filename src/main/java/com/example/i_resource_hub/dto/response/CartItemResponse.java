@@ -11,6 +11,8 @@ public class CartItemResponse {
     private String resourceTemplateId;
     private String resourceName;
     private String imageUrl;
+    private int availableQuantity;
+    private int totalQuantity;
     private String unitName;
     private Integer quantity;
     private LocalDate bookingDate;

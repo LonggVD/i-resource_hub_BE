@@ -1,0 +1,418 @@
+package com.example.i_resource_hub.service;
+
+import com.example.i_resource_hub.dto.request.PenaltyRequest;
+import com.example.i_resource_hub.dto.response.EvidenceResponse;
+import com.example.i_resource_hub.dto.response.PenaltyResponse;
+import com.example.i_resource_hub.entity.*;
+import com.example.i_resource_hub.repository.BookingEvidenceRepository;
+import com.example.i_resource_hub.repository.BookingRepository;
+import com.example.i_resource_hub.repository.PenaltyRepository;
+import com.example.i_resource_hub.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PenaltyService {
+
+    private final PenaltyRepository penaltyRepository;
+    private final UserRepository userRepository;
+    private final BookingRepository bookingRepository;
+    private final BookingEvidenceRepository bookingEvidenceRepository;
+    private final NotificationService notificationService;
+
+    /**
+     * Tạo penalty do hệ thống tự sinh (BookingCleanupTask, checkOut khi DAMAGE...).
+     * Khác với createPenalty: không cần adminUserId, createdByUser=null → fallback "Hệ thống" trong toResponse.
+     * Idempotent: nếu đã tồn tại penalty cùng booking + cùng type còn ACTIVE thì bỏ qua.
+     *
+     * @return Penalty vừa tạo, hoặc null nếu skip do đã tồn tại / dữ liệu thiếu.
+     */
+    @Transactional
+    public Penalty createSystemPenalty(User user, Booking booking, String penaltyType,
+                                       int penaltyPoint, String description) {
+        if (user == null || penaltyType == null || penaltyType.isBlank()) {
+            return null;
+        }
+
+        // Idempotent: nếu booking đã có penalty cùng type ACTIVE thì skip
+        if (booking != null
+                && penaltyRepository.existsByBooking_IdAndPenaltyTypeAndStatusAndIsDeletedFalse(
+                        booking.getId(), penaltyType, "ACTIVE")) {
+            log.debug("Skip createSystemPenalty: booking {} đã có penalty {} ACTIVE",
+                    booking.getId(), penaltyType);
+            return null;
+        }
+
+        Penalty penalty = Penalty.builder()
+                .user(user)
+                .booking(booking)
+                .penaltyType(penaltyType)
+                .penaltyPoint(penaltyPoint)
+                .description(description)
+                .status("ACTIVE")
+                .createdByUser(null) // Hệ thống
+                .requiresReview(false)
+                .build();
+        penaltyRepository.save(penalty);
+
+        // Trừ điểm tín nhiệm
+        int newScore = user.getCreditScore() - penaltyPoint;
+        user.setCreditScore(Math.max(newScore, 0));
+        if (user.getCreditScore() <= 0 && !"LOCKED".equals(user.getStatus())) {
+            user.setStatus("LOCKED");
+        }
+        userRepository.save(user);
+
+        log.info("Auto-penalty created: user={}, booking={}, type={}, point=-{}, newScore={}",
+                user.getUsername(),
+                booking != null ? booking.getId() : "(none)",
+                penaltyType, penaltyPoint, user.getCreditScore());
+
+        // Notify user
+        try {
+            String title;
+            String body;
+            if ("OVERDUE".equals(penaltyType)) {
+                title = "Bạn bị phạt do trễ trả thiết bị";
+                body = "Bị trừ " + penaltyPoint + " điểm tín nhiệm. Điểm hiện tại: "
+                        + user.getCreditScore() + ". Hãy trả thiết bị đúng giờ ở các lần sau.";
+            } else if ("DAMAGE".equals(penaltyType)) {
+                title = "Bạn bị phạt do hư hỏng thiết bị";
+                body = "Bị trừ " + penaltyPoint + " điểm tín nhiệm. Điểm hiện tại: "
+                        + user.getCreditScore() + ". Vui lòng kiểm tra thiết bị kỹ trước khi sử dụng.";
+            } else {
+                title = "Bạn nhận một án phạt mới";
+                body = description;
+            }
+            notificationService.createAndPush(user, "PENALTY_CREATED", penalty.getId(), title, body);
+        } catch (Exception e) {
+            log.warn("Không gửi được notification cho penalty {}: {}", penalty.getId(), e.getMessage());
+        }
+
+        return penalty;
+    }
+
+    /**
+     * Tạo án phạt mới + trừ điểm tín nhiệm + khóa tài khoản nếu cần
+     */
+    @Transactional
+    public PenaltyResponse createPenalty(PenaltyRequest request, String adminUserId) {
+        User targetUser = userRepository.findById(request.getUserId())
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
+
+        User adminUser = userRepository.findByUsername(adminUserId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy quản trị viên"));
+
+        Booking booking = null;
+        if (request.getBookingId() != null && !request.getBookingId().isBlank()) {
+            booking = bookingRepository.findById(request.getBookingId()).orElse(null);
+        }
+
+        // 1. Tạo bản ghi Penalty
+        Penalty penalty = Penalty.builder()
+                .user(targetUser)
+                .booking(booking)
+                .penaltyType(request.getPenaltyType())
+                .penaltyPoint(request.getPenaltyPoint())
+                .description(request.getDescription())
+                .fineAmount(request.getFineAmount())
+                .requiresReview(request.getRequiresReview() != null ? request.getRequiresReview() : false)
+                .reviewStatus(Boolean.TRUE.equals(request.getRequiresReview()) ? "PENDING" : null)
+                .status("ACTIVE")
+                .createdByUser(adminUser)
+                .build();
+        penaltyRepository.save(penalty);
+
+        // 2. Lưu minh chứng riêng cho án phạt (nếu có)
+        if (request.getEvidenceUrls() != null && !request.getEvidenceUrls().isEmpty()) {
+            java.util.List<com.example.i_resource_hub.entity.PenaltyEvidence> evidences = request.getEvidenceUrls()
+                    .stream()
+                    .map(url -> com.example.i_resource_hub.entity.PenaltyEvidence.builder()
+                            .penalty(penalty)
+                            .imageUrl(url)
+                            .build())
+                    .collect(Collectors.toList());
+            penalty.setEvidences(evidences);
+            penaltyRepository.save(penalty);
+        }
+
+        // 3. Trừ điểm tín nhiệm (creditScore)
+        int newScore = targetUser.getCreditScore() - request.getPenaltyPoint();
+        targetUser.setCreditScore(Math.max(newScore, 0)); // Không cho âm
+
+        // 4. Nếu điểm tín nhiệm <= 0 → Khóa tài khoản
+        if (targetUser.getCreditScore() <= 0) {
+            targetUser.setStatus("LOCKED");
+        }
+        userRepository.save(targetUser);
+
+        // 5. Gửi notification cho sinh viên
+        try {
+            String title = "Bạn bị xử phạt: " + request.getPenaltyType();
+            String body = "Bị trừ " + request.getPenaltyPoint() + " điểm tín nhiệm. Điểm hiện tại: "
+                    + targetUser.getCreditScore() + ". Lý do: "
+                    + (request.getDescription() != null ? request.getDescription() : "(không có)");
+            notificationService.createAndPush(
+                    targetUser, "PENALTY_CREATED", penalty.getId(), title, body);
+        } catch (Exception e) {
+            log.warn("Không gửi được notification cho penalty {}: {}", penalty.getId(), e.getMessage());
+        }
+
+        return toResponse(penalty);
+    }
+
+    /**
+     * Lấy chi tiết một án phạt
+     */
+    @Transactional(readOnly = true)
+    public PenaltyResponse getPenaltyById(String penaltyId) {
+        Penalty penalty = penaltyRepository.findById(penaltyId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
+        return toResponse(penalty);
+    }
+
+    /**
+     * Lấy tất cả án phạt (Admin xem toàn bộ)
+     */
+    @Transactional(readOnly = true)
+    public List<PenaltyResponse> getAllPenalties() {
+        return penaltyRepository.findByIsDeletedFalseOrderByCreatedAtDesc()
+                .stream()
+                .map(this::toResponse)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Lấy án phạt theo userId (SV xem của mình)
+     */
+    @Transactional(readOnly = true)
+    public List<PenaltyResponse> getPenaltiesByUser(String userId) {
+        return penaltyRepository.findByUserIdAndIsDeletedFalseOrderByCreatedAtDesc(userId)
+                .stream()
+                .map(this::toResponse)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Thu hồi án phạt (Admin sửa sai / ân xá)
+     */
+    @Transactional
+    public PenaltyResponse revokePenalty(String penaltyId) {
+        Penalty penalty = penaltyRepository.findById(penaltyId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
+
+        if (!"ACTIVE".equals(penalty.getStatus())) {
+            throw new RuntimeException("Án phạt này đã bị thu hồi trước đó");
+        }
+
+        // 1. Đánh dấu thu hồi
+        penalty.setStatus("REVOKED");
+        penaltyRepository.save(penalty);
+
+        // 2. Hoàn trả điểm tín nhiệm
+        User user = penalty.getUser();
+        int restoredScore = user.getCreditScore() + penalty.getPenaltyPoint();
+        user.setCreditScore(Math.min(restoredScore, 100)); // Tối đa 100 điểm
+
+        // 3. Mở khóa tài khoản nếu điểm đã > 0
+        boolean wasUnlocked = false;
+        if (user.getCreditScore() > 0 && "LOCKED".equals(user.getStatus())) {
+            user.setStatus("ACTIVE");
+            wasUnlocked = true;
+        }
+        userRepository.save(user);
+
+        // 4. Notify sinh viên — án phạt đã được thu hồi
+        try {
+            String title = "Án phạt đã được thu hồi";
+            StringBuilder body = new StringBuilder();
+            body.append("Án phạt ").append(penalty.getPenaltyType())
+                    .append(" của bạn đã được ân xá. Hoàn lại ")
+                    .append(penalty.getPenaltyPoint()).append(" điểm tín nhiệm. Điểm hiện tại: ")
+                    .append(user.getCreditScore()).append(".");
+            if (wasUnlocked) {
+                body.append(" Tài khoản đã được mở khoá lại.");
+            }
+            notificationService.createAndPush(
+                    user, "PENALTY_REVOKED", penalty.getId(), title, body.toString());
+        } catch (Exception e) {
+            log.warn("Không gửi được notification revoke penalty {}: {}",
+                    penalty.getId(), e.getMessage());
+        }
+
+        return toResponse(penalty);
+    }
+
+    /**
+     * Xóa mềm án phạt
+     */
+    @Transactional
+    public void deletePenalty(String penaltyId) {
+        Penalty penalty = penaltyRepository.findById(penaltyId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
+        penalty.setDeleted(true);
+        penaltyRepository.save(penalty);
+    }
+
+    /**
+     * Chuyển Entity → DTO
+     */
+    private PenaltyResponse toResponse(Penalty p) {
+        User user = p.getUser();
+        long activePenalties = penaltyRepository.countByUserIdAndStatusAndIsDeletedFalse(user.getId(), "ACTIVE");
+
+        List<EvidenceResponse> evidenceList = new ArrayList<>();
+        
+        // 1. Tìm minh chứng (Truy quét rộng: theo Booking, Batch hoặc ResourceItem)
+        if (p.getBooking() != null) {
+            String bookingId = p.getBooking().getId();
+            String batchToken = p.getBooking().getBatchToken();
+            String resourceItemId = (p.getBooking().getResourceItem() != null) ? p.getBooking().getResourceItem().getId() : null;
+
+            // Lấy tất cả minh chứng liên quan đến đơn mượn này hoặc lô này
+            List<BookingEvidence> bEvidences;
+            if (batchToken != null && !batchToken.isBlank()) {
+                // Nếu mượn theo lô, lấy tất cả minh chứng của các đơn trong lô đó
+                bEvidences = bookingEvidenceRepository.findAllByBookingBatchToken(batchToken);
+            } else {
+                bEvidences = bookingEvidenceRepository.findByBookingIdAndIsDeletedFalseOrderByCreatedAtDesc(bookingId);
+            }
+            
+            // Nếu vẫn rỗng, thử tìm theo ResourceItem cụ thể
+            if (bEvidences.isEmpty() && resourceItemId != null) {
+                bEvidences = bookingEvidenceRepository.findByResourceItemIdAndIsDeletedFalseOrderByCreatedAtDesc(resourceItemId);
+            }
+
+            bEvidences.stream()
+                    .map(this::mapToEvidenceResponse)
+                    .forEach(evidenceList::add);
+        }
+
+        // 2. Lấy minh chứng riêng của Án phạt
+        if (p.getEvidences() != null && !p.getEvidences().isEmpty()) {
+            p.getEvidences().stream()
+                    .map(ev -> mapToEvidenceResponse(ev, p))
+                    .forEach(evidenceList::add);
+        }
+
+        // 3. Xác định Ảnh đại diện (Thumbnail)
+        String thumb = null;
+        if (!evidenceList.isEmpty()) {
+            // Ưu tiên ảnh minh chứng thực tế
+            thumb = evidenceList.get(0).getImageUrl();
+            if (thumb != null && thumb.contains(",")) thumb = thumb.split(",")[0];
+        } 
+        
+        // Fallback: Nếu không có ảnh minh chứng, lấy ảnh của mẫu thiết bị (giống My Bookings)
+        if (thumb == null && p.getBooking() != null && p.getBooking().getResourceItem() != null 
+            && p.getBooking().getResourceItem().getTemplate() != null) {
+            thumb = p.getBooking().getResourceItem().getTemplate().getImageUrl();
+        }
+
+        return PenaltyResponse.builder()
+                .id(p.getId())
+                .userId(user.getId())
+                .studentCode(user.getStudentCode())
+                .studentName(user.getFullName())
+                .bookingId(p.getBooking() != null ? p.getBooking().getId() : null)
+                .penaltyType(p.getPenaltyType())
+                .penaltyPoint(p.getPenaltyPoint())
+                .description(p.getDescription())
+                .status(p.getStatus())
+                .createdByName(p.getCreatedByUser() != null ? p.getCreatedByUser().getFullName() : "Hệ thống")
+                .createdAt(p.getCreatedAt())
+                .currentCreditScore(user.getCreditScore())
+                .userStatus(user.getStatus())
+                .totalActivePenalties(activePenalties)
+                .evidences(evidenceList)
+                .fineAmount(p.getFineAmount())
+                .requiresReview(p.getRequiresReview())
+                .reviewStatus(p.getReviewStatus())
+                .bookingBatchToken(p.getBooking() != null ? p.getBooking().getBatchToken() : null)
+                .bookingDate(p.getBooking() != null ? p.getBooking().getBookingDate() : null)
+                .bookingSlot(p.getBooking() != null && p.getBooking().getSlot() != null
+                        ? p.getBooking().getSlot().getSlotName()
+                        : null)
+                .bookingDeviceName(p.getBooking() != null && p.getBooking().getResourceItem() != null
+                        && p.getBooking().getResourceItem().getTemplate() != null
+                                ? p.getBooking().getResourceItem().getTemplate().getName()
+                                : null)
+                .thumbnailUrl(thumb)
+                .build();
+    }
+
+    private EvidenceResponse mapToEvidenceResponse(BookingEvidence e) {
+        Booking booking = e.getBooking();
+        String borrowerName = null;
+        String borrowerId = null;
+        String userId = null;
+        String serialNumber = null;
+        String deviceName = null;
+        String ownerUnitName = null;
+
+        if (booking != null) {
+            if (booking.getUser() != null) {
+                borrowerName = booking.getUser().getFullName();
+                borrowerId = booking.getUser().getStudentCode();
+                userId = booking.getUser().getId();
+            }
+            if (booking.getResourceItem() != null) {
+                serialNumber = booking.getResourceItem().getSerialNumber();
+                if (booking.getResourceItem().getTemplate() != null) {
+                    deviceName = booking.getResourceItem().getTemplate().getName();
+                }
+            }
+            if (booking.getManagedByUnit() != null) {
+                ownerUnitName = booking.getManagedByUnit().getUnitName();
+            }
+        }
+
+        return EvidenceResponse.builder()
+                .id(e.getId())
+                .bookingId(booking != null ? booking.getId() : null)
+                .resourceItemId(e.getResourceItem() != null ? e.getResourceItem().getId() : null)
+                .evidenceType(e.getEvidenceType())
+                .imageUrl(e.getImageUrl())
+                .description(e.getDescription())
+                .resolution(e.getResolution())
+                .isResolved(e.getIsResolved())
+                .createdBy(e.getCreatedBy() != null ? e.getCreatedBy().getFullName() : "Hệ thống")
+                .createdAt(e.getCreatedAt())
+                .borrowerName(borrowerName)
+                .borrowerId(borrowerId)
+                .userId(userId)
+                .serialNumber(serialNumber)
+                .deviceName(deviceName)
+                .ownerUnitName(ownerUnitName)
+                .build();
+    }
+
+    private EvidenceResponse mapToEvidenceResponse(PenaltyEvidence e, Penalty p) {
+        User user = p.getUser();
+        Booking booking = p.getBooking();
+        
+        return EvidenceResponse.builder()
+                .id(e.getId())
+                .evidenceType("PENALTY_PROOF")
+                .imageUrl(e.getImageUrl())
+                .description("Minh chứng đi kèm án phạt: " + p.getPenaltyType())
+                .createdBy(p.getCreatedByUser() != null ? p.getCreatedByUser().getFullName() : "Hệ thống")
+                .createdAt(e.getCreatedAt() != null ? e.getCreatedAt() : p.getCreatedAt())
+                .borrowerName(user.getFullName())
+                .borrowerId(user.getStudentCode())
+                .userId(user.getId())
+                .bookingId(booking != null ? booking.getId() : null)
+                .deviceName(booking != null && booking.getResourceItem() != null && booking.getResourceItem().getTemplate() != null 
+                            ? booking.getResourceItem().getTemplate().getName() : null)
+                .serialNumber(booking != null && booking.getResourceItem() != null ? booking.getResourceItem().getSerialNumber() : null)
+                .build();
+    }
+}

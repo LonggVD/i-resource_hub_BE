@@ -2,8 +2,12 @@ package com.example.i_resource_hub.exception;
 
 import com.example.i_resource_hub.dto.response.ErrorResponse;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.OptimisticLockException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -33,6 +37,22 @@ public class GlobalExceptionHandler {
                 .time(LocalDateTime.now())
                 .build();
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
+
+    // 0. Tranh chấp đặt lịch / ghi đè đồng thời -> 409 Conflict
+    @ExceptionHandler({
+            DataIntegrityViolationException.class,
+            OptimisticLockException.class,
+            ObjectOptimisticLockingFailureException.class,
+            PessimisticLockingFailureException.class
+    })
+    public ResponseEntity<ErrorResponse> handleConflict(Exception ex) {
+        ErrorResponse errorResponse = ErrorResponse.builder()
+                .status(HttpStatus.CONFLICT.value())
+                .message("Thiết bị vừa được người khác đặt hoặc dữ liệu đã thay đổi, vui lòng thử lại.")
+                .time(LocalDateTime.now())
+                .build();
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
     }
 
     // 1. Bắt các lỗi nghiệp vụ từ tầng Service (Trùng tên, Sai pass, Chờ duyệt...)

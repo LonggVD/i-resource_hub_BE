@@ -18,7 +18,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*", maxAge = 3600)
 public class UserController {
 
     private final UserService userService;
@@ -32,6 +31,14 @@ public class UserController {
             @RequestParam(required = false) String roleId,
             Pageable pageable) {
         return ResponseEntity.ok(userService.getPageUsers(keyword, unitId, status, roleId, pageable));
+    }
+
+    @GetMapping("/students")
+    @PreAuthorize("hasAnyAuthority('USER_MANAGE', 'RESOURCE_MANAGE', 'ADMIN')")
+    public ResponseEntity<Page<UserResponse>> getStudents(
+            @RequestParam(required = false) String keyword,
+            Pageable pageable) {
+        return ResponseEntity.ok(userService.getStudents(keyword, pageable));
     }
 
     @GetMapping("/{id}")

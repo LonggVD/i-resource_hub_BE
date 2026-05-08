@@ -4,13 +4,16 @@ import com.example.i_resource_hub.dto.request.ResourceItemBatchCreateRequest;
 import com.example.i_resource_hub.dto.request.ResourceItemCreateRequest;
 import com.example.i_resource_hub.dto.request.ResourceItemUpdateRequest;
 import com.example.i_resource_hub.dto.response.ResourceItemResponse;
+import com.example.i_resource_hub.entity.OrganizationUnit;
 import com.example.i_resource_hub.entity.ResourceItem;
 import com.example.i_resource_hub.entity.ResourceTemplate;
 import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.ResourceItemRepository;
 import com.example.i_resource_hub.repository.ResourceTemplateRepository;
+import com.example.i_resource_hub.repository.specification.ResourceItemSpecification;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +38,16 @@ public class ResourceItemService {
     }
 
     @Transactional(readOnly = true)
+    public List<ResourceItemResponse> filter(String templateId, String unitId, String status,
+                                             String conditionStatus, String keyword) {
+        Specification<ResourceItem> spec = ResourceItemSpecification.filter(
+                templateId, unitId, status, conditionStatus, keyword);
+        return resourceItemRepository.findAll(spec).stream()
+                .map(this::mapToResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
     public ResourceItemResponse getById(String id) {
         ResourceItem item = resourceItemRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy thiết bị với ID: " + id));
@@ -44,7 +57,8 @@ public class ResourceItemService {
     @Transactional(readOnly = true)
     public ResourceItemResponse getBySerialNumber(String serialNumber) {
         ResourceItem item = resourceItemRepository.findBySerialNumber(serialNumber)
-                .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy thiết bị với số Serial: " + serialNumber));
+                .orElseThrow(
+                        () -> new EntityNotFoundException("Không tìm thấy thiết bị với số Serial: " + serialNumber));
         return mapToResponse(item);
     }
 
@@ -114,10 +128,14 @@ public class ResourceItemService {
             item.setSerialNumber(request.getSerialNumber());
         }
 
-        if (request.getPurchaseDate() != null) item.setPurchaseDate(request.getPurchaseDate());
-        if (request.getWarrantyExpiry() != null) item.setWarrantyExpiry(request.getWarrantyExpiry());
-        if (request.getConditionStatus() != null) item.setConditionStatus(request.getConditionStatus());
-        if (request.getStatus() != null) item.setStatus(request.getStatus());
+        if (request.getPurchaseDate() != null)
+            item.setPurchaseDate(request.getPurchaseDate());
+        if (request.getWarrantyExpiry() != null)
+            item.setWarrantyExpiry(request.getWarrantyExpiry());
+        if (request.getConditionStatus() != null)
+            item.setConditionStatus(request.getConditionStatus());
+        if (request.getStatus() != null)
+            item.setStatus(request.getStatus());
 
         return mapToResponse(resourceItemRepository.save(item));
     }
@@ -138,7 +156,6 @@ public class ResourceItemService {
         resourceItemRepository.save(item);
     }
 
-
     private ResourceItemResponse mapToResponse(ResourceItem item) {
         ResourceItemResponse.TemplateSummary templateSummary = null;
         if (item.getTemplate() != null) {
@@ -150,10 +167,14 @@ public class ResourceItemService {
         }
 
         ResourceItemResponse.UnitSummary unitSummary = null;
-        if (item.getManagedByUnit() != null) {
+        // Ưu tiên lấy đơn vị trực tiếp từ Item, nếu không có thì lấy từ Template
+        OrganizationUnit unit = item.getManagedByUnit() != null ? item.getManagedByUnit()
+                : (item.getTemplate() != null ? item.getTemplate().getUnit() : null);
+
+        if (unit != null) {
             unitSummary = ResourceItemResponse.UnitSummary.builder()
-                    .id(item.getManagedByUnit().getId())
-                    .unitName(item.getManagedByUnit().getUnitName())
+                    .id(unit.getId())
+                    .unitName(unit.getUnitName())
                     .build();
         }
 
