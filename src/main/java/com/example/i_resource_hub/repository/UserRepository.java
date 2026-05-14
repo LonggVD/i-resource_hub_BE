@@ -3,6 +3,7 @@ package com.example.i_resource_hub.repository;
 import com.example.i_resource_hub.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -24,5 +25,31 @@ public interface UserRepository extends JpaRepository<User, String>, JpaSpecific
             "WHERE u.status = 'ACTIVE' " +
             "AND ((u.unit.id = :unitId AND r.roleCode = 'MANAGER') OR r.roleCode = 'ADMIN')")
     List<User> findManagersAndAdminsByUnitId(@Param("unitId") String unitId);
-}
 
+    /**
+     * Atomic deduct creditScore — tránh race condition khi nhiều penalty cùng tạo song song.
+     * SQL native: dùng GREATEST(.., 0) đảm bảo score không âm.
+     * Đồng thời tự động set status='LOCKED' nếu score sau khi trừ về 0.
+     * @return số dòng bị ảnh hưởng (1 nếu thành công, 0 nếu user không tồn tại).
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = "UPDATE users SET " +
+            "credit_score = GREATEST(credit_score - :points, 0), " +
+            "status = CASE WHEN credit_score - :points <= 0 THEN 'LOCKED' ELSE status END " +
+            "WHERE id = :userId",
+            nativeQuery = true)
+    int deductCreditScore(@Param("userId") String userId, @Param("points") int points);
+
+    /**
+     * Atomic restore creditScore — dùng khi revoke penalty.
+     * Giới hạn tối đa 100 điểm.
+     * Đồng thời tự động unlock account (status='ACTIVE') nếu score sau khi cộng > 0.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = "UPDATE users SET " +
+            "credit_score = LEAST(credit_score + :points, 100), " +
+            "status = CASE WHEN credit_score + :points > 0 AND status = 'LOCKED' THEN 'ACTIVE' ELSE status END " +
+            "WHERE id = :userId",
+            nativeQuery = true)
+    int restoreCreditScore(@Param("userId") String userId, @Param("points") int points);
+}

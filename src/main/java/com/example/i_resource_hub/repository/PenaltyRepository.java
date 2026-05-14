@@ -27,4 +27,12 @@ public interface PenaltyRepository extends JpaRepository<Penalty, String> {
      */
     boolean existsByBooking_IdAndPenaltyTypeAndStatusAndIsDeletedFalse(
             String bookingId, String penaltyType, String status);
+
+    /**
+     * Idempotent check chặt hơn: kiểm tra ĐÃ TỪNG tạo penalty cùng booking + cùng type
+     * bất kể trạng thái hiện tại (ACTIVE / REVOKED). Dùng để cron task không phạt lại
+     * một booking đã được ân xá (revoked) trước đó.
+     */
+    boolean existsByBooking_IdAndPenaltyTypeAndIsDeletedFalse(
+            String bookingId, String penaltyType);
 }

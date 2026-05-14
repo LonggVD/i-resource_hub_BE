@@ -1,0 +1,5 @@
+digraph "summary" {
+  "classes"                                          -> "java.base (java.base)";
+  "classes"                                          -> "java.sql (java.sql)";
+  "classes"                                          -> "not found";
+}

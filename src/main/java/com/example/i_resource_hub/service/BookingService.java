@@ -748,16 +748,21 @@ public class BookingService {
                         "Tự động hủy do hết giờ ca mượn (Sinh viên không đến nhận đồ hoặc Manager không duyệt kịp)");
                 booking.setCancelledAt(LocalDateTime.now());
 
-                // Giải phóng thiết bị nếu đơn đã ở trạng thái APPROVED
+                // Giải phóng thiết bị nếu đơn đã ở trạng thái APPROVED.
+                // CHỈ đụng vào item đang RESERVED / AVAILABLE; tuyệt đối không reset
+                // item đang IN_USE (đã handover cho user khác), MAINTENANCE, DAMAGED, LOST.
                 if ("APPROVED".equalsIgnoreCase(oldStatus) && booking.getResourceItem() != null) {
                     ResourceItem item = booking.getResourceItem();
-                    if ("BORROWED".equalsIgnoreCase(item.getStatus())) {
-                        // Trường hợp hi hữu nếu có lỗi logic, an toàn nhất là check status item
+                    String currentItemStatus = item.getStatus();
+                    if ("RESERVED".equalsIgnoreCase(currentItemStatus)
+                            || "AVAILABLE".equalsIgnoreCase(currentItemStatus)
+                            || currentItemStatus == null) {
+                        item.setStatus("AVAILABLE");
+                        resourceItemRepository.save(item);
+                    } else {
+                        log.warn("autoCancelExpiredBookings: bỏ qua item {} (status={}) cho booking {} — không reset để tránh ghi đè state hợp lệ.",
+                                item.getId(), currentItemStatus, booking.getId());
                     }
-                    // Thực tế khi APPROVED, item vẫn là AVAILABLE hoặc RESERVED tùy logic,
-                    // nhưng ở đây ta đảm bảo nó AVAILABLE
-                    item.setStatus("AVAILABLE");
-                    resourceItemRepository.save(item);
                 }
 
                 bookingRepository.save(booking);

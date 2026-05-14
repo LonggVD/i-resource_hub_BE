@@ -42,11 +42,12 @@ public class PenaltyService {
             return null;
         }
 
-        // Idempotent: nếu booking đã có penalty cùng type ACTIVE thì skip
+        // Idempotent: nếu booking đã từng có penalty cùng type (bất kể ACTIVE / REVOKED) thì skip.
+        // Tránh trường hợp admin ân xá rồi cron lại phạt lần 2.
         if (booking != null
-                && penaltyRepository.existsByBooking_IdAndPenaltyTypeAndStatusAndIsDeletedFalse(
-                        booking.getId(), penaltyType, "ACTIVE")) {
-            log.debug("Skip createSystemPenalty: booking {} đã có penalty {} ACTIVE",
+                && penaltyRepository.existsByBooking_IdAndPenaltyTypeAndIsDeletedFalse(
+                        booking.getId(), penaltyType)) {
+            log.debug("Skip createSystemPenalty: booking {} đã có penalty {} (active hoặc đã revoked)",
                     booking.getId(), penaltyType);
             return null;
         }
@@ -63,13 +64,13 @@ public class PenaltyService {
                 .build();
         penaltyRepository.save(penalty);
 
-        // Trừ điểm tín nhiệm
-        int newScore = user.getCreditScore() - penaltyPoint;
-        user.setCreditScore(Math.max(newScore, 0));
-        if (user.getCreditScore() <= 0 && !"LOCKED".equals(user.getStatus())) {
-            user.setStatus("LOCKED");
-        }
-        userRepository.save(user);
+        // Atomic UPDATE trừ điểm tín nhiệm — tránh race condition khi nhiều penalty cùng tạo song song.
+        // Đồng thời tự động set LOCKED nếu score về 0 (xử lý trong native query).
+        userRepository.deductCreditScore(user.getId(), penaltyPoint);
+        // Reload user để lấy state mới (vì update không sync với managed entity)
+        User refreshed = userRepository.findById(user.getId()).orElse(user);
+        user.setCreditScore(refreshed.getCreditScore());
+        user.setStatus(refreshed.getStatus());
 
         log.info("Auto-penalty created: user={}, booking={}, type={}, point=-{}, newScore={}",
                 user.getUsername(),
@@ -144,15 +145,13 @@ public class PenaltyService {
             penaltyRepository.save(penalty);
         }
 
-        // 3. Trừ điểm tín nhiệm (creditScore)
-        int newScore = targetUser.getCreditScore() - request.getPenaltyPoint();
-        targetUser.setCreditScore(Math.max(newScore, 0)); // Không cho âm
-
-        // 4. Nếu điểm tín nhiệm <= 0 → Khóa tài khoản
-        if (targetUser.getCreditScore() <= 0) {
-            targetUser.setStatus("LOCKED");
-        }
-        userRepository.save(targetUser);
+        // 3. Atomic UPDATE: trừ điểm tín nhiệm + lock account nếu score về 0.
+        // Tránh race condition khi 2 admin tạo penalty cho cùng SV đồng thời.
+        userRepository.deductCreditScore(targetUser.getId(), request.getPenaltyPoint());
+        // Reload state mới
+        User refreshed = userRepository.findById(targetUser.getId()).orElse(targetUser);
+        targetUser.setCreditScore(refreshed.getCreditScore());
+        targetUser.setStatus(refreshed.getStatus());
 
         // 5. Gửi notification cho sinh viên
         try {
@@ -217,18 +216,19 @@ public class PenaltyService {
         penalty.setStatus("REVOKED");
         penaltyRepository.save(penalty);
 
-        // 2. Hoàn trả điểm tín nhiệm
+        // 2 + 3. Atomic UPDATE: hoàn điểm tín nhiệm (giới hạn 100) + tự động unlock account nếu score > 0.
         User user = penalty.getUser();
-        int restoredScore = user.getCreditScore() + penalty.getPenaltyPoint();
-        user.setCreditScore(Math.min(restoredScore, 100)); // Tối đa 100 điểm
+        boolean wasLocked = "LOCKED".equals(user.getStatus());
+        String userId = user.getId();
+        int restorePoints = penalty.getPenaltyPoint();
+        userRepository.restoreCreditScore(userId, restorePoints);
 
-        // 3. Mở khóa tài khoản nếu điểm đã > 0
-        boolean wasUnlocked = false;
-        if (user.getCreditScore() > 0 && "LOCKED".equals(user.getStatus())) {
-            user.setStatus("ACTIVE");
-            wasUnlocked = true;
-        }
-        userRepository.save(user);
+        // Sau khi @Modifying(clearAutomatically=true) chạy, persistence context bị clear
+        // → toàn bộ proxy (kể cả penalty.booking) bị detach. Reload lại penalty + user để dùng tiếp.
+        penalty = penaltyRepository.findById(penaltyId).orElseThrow();
+        User refreshed = userRepository.findById(userId).orElseThrow();
+        user = refreshed;
+        boolean wasUnlocked = wasLocked && "ACTIVE".equals(user.getStatus());
 
         // 4. Notify sinh viên — án phạt đã được thu hồi
         try {

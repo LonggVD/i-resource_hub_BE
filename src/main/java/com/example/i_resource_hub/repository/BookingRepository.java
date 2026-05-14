@@ -54,4 +54,14 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
 
     @Query("SELECT b FROM Booking b WHERE b.status = 'BORROWED' AND b.bookingDate <= :today")
     List<Booking> findOverdueCandidates(@Param("today") LocalDate today);
+
+    @Query("SELECT DISTINCT b FROM Booking b " +
+           "LEFT JOIN FETCH b.user " +
+           "LEFT JOIN FETCH b.slot " +
+           "LEFT JOIN FETCH b.resourceItem ri " +
+           "LEFT JOIN FETCH ri.template " +
+           "LEFT JOIN FETCH b.managedByUnit " +
+           "WHERE b.bookingDate BETWEEN :from AND :to " +
+           "ORDER BY b.bookingDate DESC, b.createdAt DESC")
+    List<Booking> findByBookingDateBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
 }
