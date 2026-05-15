@@ -59,6 +59,38 @@ public class EmailService {
         mailSender.send(message);
     }
 
+    public void sendOverdueReminderEmail(String to,
+                                         String fullName,
+                                         String deviceName,
+                                         String serialNumber,
+                                         String slotName,
+                                         String expectedReturnTime,
+                                         long overdueDays) throws MessagingException {
+        MimeMessage message = mailSender.createMimeMessage();
+        MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+
+        helper.setTo(to);
+        helper.setSubject("[iResourceHub] Nhắc nhở trả thiết bị quá hạn");
+
+        String content = "<div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px;'>"
+                + "<h2 style='color: #e74c3c; text-align: center;'>Nhắc nhở trả thiết bị</h2>"
+                + "<p>Chào <b>" + fullName + "</b>,</p>"
+                + "<p>Hệ thống <b>iResourceHub</b> ghi nhận bạn đang giữ thiết bị quá hạn trả. Vui lòng mang thiết bị lên trả sớm nhất có thể để tránh bị xử phạt theo quy định.</p>"
+                + "<div style='background-color: #fff5f5; border-left: 4px solid #e74c3c; padding: 12px 16px; margin: 16px 0; border-radius: 4px;'>"
+                + "<p style='margin: 4px 0;'><b>Thiết bị:</b> " + deviceName + " (" + serialNumber + ")</p>"
+                + "<p style='margin: 4px 0;'><b>Ca mượn:</b> " + (slotName != null ? slotName : "—") + "</p>"
+                + "<p style='margin: 4px 0;'><b>Hạn trả:</b> " + expectedReturnTime + "</p>"
+                + "<p style='margin: 4px 0; color: #e74c3c;'><b>Đã trễ:</b> " + overdueDays + " ngày</p>"
+                + "</div>"
+                + "<p>Nếu bạn đã trả thiết bị nhưng vẫn nhận được email này, vui lòng liên hệ phòng quản lý thiết bị để được hỗ trợ.</p>"
+                + "<hr style='border: 0; border-top: 1px solid #eee;'>"
+                + "<p style='font-size: 12px; color: #7f8c8d; text-align: center;'>Đây là tin nhắn tự động, vui lòng không trả lời email này.</p>"
+                + "</div>";
+
+        helper.setText(content, true);
+        mailSender.send(message);
+    }
+
     public void sendRejectionEmail(String to, String fullName) throws MessagingException {
         MimeMessage message = mailSender.createMimeMessage();
         MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");

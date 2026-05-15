@@ -270,6 +270,8 @@ public class BookingService {
                 .startTime(booking.getSlot() != null ? booking.getSlot().getStartTime().toString() : "")
                 .endTime(booking.getSlot() != null ? booking.getSlot().getEndTime().toString() : "")
                 .status(booking.getStatus())
+                .actualStartTime(booking.getActualStartTime())
+                .actualEndTime(booking.getActualEndTime())
                 .qrCodeToken(booking.getQrCodeToken())
                 .purpose(booking.getPurpose())
                 .batchToken(booking.getBatchToken())
@@ -798,12 +800,20 @@ public class BookingService {
      */
     @Transactional
     public void autoPenalizeOverdueReturns() {
-        List<Booking> borrowed = bookingRepository.findAllByStatusIn(List.of("BORROWED"));
+        // Lấy trước danh sách id — bên trong createSystemPenalty có UPDATE @Modifying(clearAutomatically=true)
+        // sẽ detach toàn bộ entity đã cache, gây LazyInitializationException ở iteration kế tiếp khi
+        // truy cập lazy association (resourceItem, slot, user...). Reload từng booking trong vòng lặp.
+        List<String> bookingIds = bookingRepository.findAllByStatusIn(List.of("BORROWED"))
+                .stream()
+                .map(Booking::getId)
+                .toList();
         LocalDateTime now = LocalDateTime.now();
         int count = 0;
 
-        for (Booking booking : borrowed) {
-            if (booking.getSlot() == null || booking.getBookingDate() == null
+        for (String bookingId : bookingIds) {
+            Booking booking = bookingRepository.findById(bookingId).orElse(null);
+            if (booking == null
+                    || booking.getSlot() == null || booking.getBookingDate() == null
                     || booking.getUser() == null) {
                 continue;
             }
@@ -824,10 +834,13 @@ public class BookingService {
                         booking.getSlot().getSlotName(),
                         booking.getBookingDate());
 
+                // Snapshot status trước khi createSystemPenalty clear context.
+                String currentStatus = booking.getStatus();
+
                 Penalty p = penaltyService.createSystemPenalty(
                         booking.getUser(), booking, "OVERDUE", latePenaltyPoint, desc);
                 if (p != null) {
-                    saveHistory(booking, booking.getStatus(), booking.getStatus(), null,
+                    saveHistory(booking, currentStatus, currentStatus, null,
                             "Hệ thống tự động ghi nhận phạt LATE_RETURN (-" + latePenaltyPoint + "đ)");
                     count++;
                 }
@@ -866,7 +879,6 @@ public class BookingService {
             return;
 
         List<String> ids = request.getBookingIds();
-        List<Booking> bookingsToReturn = bookingRepository.findAllById(ids);
         User currentUser = getCurrentUser();
 
         // Map damage info for quick lookup
@@ -877,11 +889,13 @@ public class BookingService {
             }
         }
 
-        for (Booking booking : bookingsToReturn) {
-            if (!"BORROWED".equalsIgnoreCase(booking.getStatus()))
+        // Reload từng booking trong vòng lặp: createSystemPenalty bên dưới có
+        // @Modifying(clearAutomatically=true) clear persistence context → các proxy lazy
+        // (resourceItem, slot, user) bị detach, gây LazyInitializationException ở iteration kế tiếp.
+        for (String bookingId : ids) {
+            Booking booking = bookingRepository.findById(bookingId).orElse(null);
+            if (booking == null || !"BORROWED".equalsIgnoreCase(booking.getStatus()))
                 continue;
-
-            String bookingId = booking.getId();
             ResourceItem item = booking.getResourceItem();
             com.example.i_resource_hub.dto.request.BulkReturnRequest.ItemDamageRequest damageInfo = damageMap
                     .get(bookingId);

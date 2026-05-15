@@ -74,6 +74,7 @@ public class DashboardResponse {
         private String studentName;
         private String deviceName;
         private String serialNumber;
+        private String slotName;
         private String expectedReturnTime;
         private long overdueDays;
     }

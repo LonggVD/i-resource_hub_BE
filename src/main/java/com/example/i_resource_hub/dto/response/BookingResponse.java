@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Data
 @Builder
@@ -25,6 +26,8 @@ public class BookingResponse {
     private String startTime; // LocalTime string
     private String endTime; // LocalTime string
     private String status;
+    private LocalDateTime actualStartTime;
+    private LocalDateTime actualEndTime;
     private String qrCodeToken;
     private String purpose;
     private String batchToken;

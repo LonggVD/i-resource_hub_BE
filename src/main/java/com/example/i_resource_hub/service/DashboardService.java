@@ -1,10 +1,13 @@
 package com.example.i_resource_hub.service;
 
+import com.example.i_resource_hub.dto.request.OverdueRemindRequest;
 import com.example.i_resource_hub.dto.response.DashboardResponse;
+import com.example.i_resource_hub.dto.response.OverdueRemindResponse;
 import com.example.i_resource_hub.entity.Booking;
 import com.example.i_resource_hub.repository.BookingRepository;
 import com.example.i_resource_hub.repository.ResourceItemRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,11 +21,13 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class DashboardService {
 
     private final BookingRepository bookingRepository;
     private final ResourceItemRepository resourceItemRepository;
+    private final EmailService emailService;
 
     @Transactional(readOnly = true)
     public DashboardResponse getDashboardStats() {
@@ -108,6 +113,7 @@ public class DashboardService {
                         .studentName(b.getUser() != null ? b.getUser().getFullName() : "N/A")
                         .deviceName(b.getResourceItem() != null && b.getResourceItem().getTemplate() != null ? b.getResourceItem().getTemplate().getName() : "N/A")
                         .serialNumber(b.getResourceItem() != null ? b.getResourceItem().getSerialNumber() : "N/A")
+                        .slotName(b.getSlot().getSlotName())
                         .expectedReturnTime(endTime.format(DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy")))
                         .overdueDays(overdueDays)
                         .build());
@@ -124,6 +130,76 @@ public class DashboardService {
                 .equipmentStatusChart(equipmentStatusChart)
                 .topEquipments(topEquips)
                 .overdueBookings(overdues)
+                .build();
+    }
+
+    /**
+     * Gửi email nhắc nhở cho các booking quá hạn.
+     * Xử lý từng booking riêng để 1 email lỗi không phá batch.
+     */
+    @Transactional(readOnly = true)
+    public OverdueRemindResponse remindOverdue(OverdueRemindRequest request) {
+        List<String> ids = request.getBookingIds();
+        List<Booking> bookings = bookingRepository.findAllById(ids);
+
+        List<String> skipped = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        int sent = 0;
+
+        LocalDateTime now = LocalDateTime.now();
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy");
+
+        for (Booking b : bookings) {
+            if (b.getUser() == null || b.getUser().getEmail() == null || b.getUser().getEmail().isBlank()) {
+                skipped.add(b.getId());
+                continue;
+            }
+            if (b.getSlot() == null || b.getBookingDate() == null) {
+                skipped.add(b.getId());
+                continue;
+            }
+            LocalDateTime endTime = LocalDateTime.of(b.getBookingDate(), b.getSlot().getEndTime());
+            if (!now.isAfter(endTime)) {
+                // Không thực sự quá hạn — bỏ qua để tránh gửi nhầm
+                skipped.add(b.getId());
+                continue;
+            }
+
+            long overdueDays = ChronoUnit.DAYS.between(endTime.toLocalDate(), now.toLocalDate());
+            String deviceName = (b.getResourceItem() != null && b.getResourceItem().getTemplate() != null)
+                    ? b.getResourceItem().getTemplate().getName() : "N/A";
+            String serial = (b.getResourceItem() != null) ? b.getResourceItem().getSerialNumber() : "N/A";
+
+            try {
+                emailService.sendOverdueReminderEmail(
+                        b.getUser().getEmail(),
+                        b.getUser().getFullName(),
+                        deviceName,
+                        serial,
+                        b.getSlot().getSlotName(),
+                        endTime.format(fmt),
+                        overdueDays
+                );
+                sent++;
+            } catch (Exception ex) {
+                log.warn("Gửi email nhắc nhở thất bại cho booking {}: {}", b.getId(), ex.getMessage());
+                failed.add(b.getId());
+            }
+        }
+
+        // Các id client gửi mà DB không tìm thấy
+        if (bookings.size() < ids.size()) {
+            List<String> foundIds = bookings.stream().map(Booking::getId).collect(Collectors.toList());
+            for (String id : ids) {
+                if (!foundIds.contains(id)) skipped.add(id);
+            }
+        }
+
+        return OverdueRemindResponse.builder()
+                .requested(ids.size())
+                .sent(sent)
+                .skippedBookingIds(skipped)
+                .failedBookingIds(failed)
                 .build();
     }
 }

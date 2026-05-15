@@ -52,6 +52,9 @@ public class PenaltyService {
             return null;
         }
 
+        // Chụp id trước khi deductCreditScore (clearAutomatically=true) detach proxy.
+        String userId = user.getId();
+
         Penalty penalty = Penalty.builder()
                 .user(user)
                 .booking(booking)
@@ -66,16 +69,17 @@ public class PenaltyService {
 
         // Atomic UPDATE trừ điểm tín nhiệm — tránh race condition khi nhiều penalty cùng tạo song song.
         // Đồng thời tự động set LOCKED nếu score về 0 (xử lý trong native query).
-        userRepository.deductCreditScore(user.getId(), penaltyPoint);
-        // Reload user để lấy state mới (vì update không sync với managed entity)
-        User refreshed = userRepository.findById(user.getId()).orElse(user);
-        user.setCreditScore(refreshed.getCreditScore());
-        user.setStatus(refreshed.getStatus());
+        userRepository.deductCreditScore(userId, penaltyPoint);
+
+        // Sau @Modifying(clearAutomatically=true), persistence context bị clear → proxy `user` gốc
+        // bị detach (LazyInitializationException nếu gọi setter/getter chưa khởi tạo).
+        // Reload managed entity và dùng nó cho mọi thao tác phía sau.
+        User refreshed = userRepository.findById(userId).orElseThrow();
 
         log.info("Auto-penalty created: user={}, booking={}, type={}, point=-{}, newScore={}",
-                user.getUsername(),
+                refreshed.getUsername(),
                 booking != null ? booking.getId() : "(none)",
-                penaltyType, penaltyPoint, user.getCreditScore());
+                penaltyType, penaltyPoint, refreshed.getCreditScore());
 
         // Notify user
         try {
@@ -84,16 +88,16 @@ public class PenaltyService {
             if ("OVERDUE".equals(penaltyType)) {
                 title = "Bạn bị phạt do trễ trả thiết bị";
                 body = "Bị trừ " + penaltyPoint + " điểm tín nhiệm. Điểm hiện tại: "
-                        + user.getCreditScore() + ". Hãy trả thiết bị đúng giờ ở các lần sau.";
+                        + refreshed.getCreditScore() + ". Hãy trả thiết bị đúng giờ ở các lần sau.";
             } else if ("DAMAGE".equals(penaltyType)) {
                 title = "Bạn bị phạt do hư hỏng thiết bị";
                 body = "Bị trừ " + penaltyPoint + " điểm tín nhiệm. Điểm hiện tại: "
-                        + user.getCreditScore() + ". Vui lòng kiểm tra thiết bị kỹ trước khi sử dụng.";
+                        + refreshed.getCreditScore() + ". Vui lòng kiểm tra thiết bị kỹ trước khi sử dụng.";
             } else {
                 title = "Bạn nhận một án phạt mới";
                 body = description;
             }
-            notificationService.createAndPush(user, "PENALTY_CREATED", penalty.getId(), title, body);
+            notificationService.createAndPush(refreshed, "PENALTY_CREATED", penalty.getId(), title, body);
         } catch (Exception e) {
             log.warn("Không gửi được notification cho penalty {}: {}", penalty.getId(), e.getMessage());
         }

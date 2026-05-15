@@ -29,6 +29,8 @@ public class DataSeeder implements CommandLineRunner {
     private final TimeSlotRepository timeSlotRepository;
     private final ResourceItemRepository resourceItemRepository;
     private final BookingRepository bookingRepository;
+    private final CategoryRepository categoryRepository;
+    private final ResourceTemplateRepository resourceTemplateRepository;
 
     @Override
     @Transactional
@@ -96,6 +98,12 @@ public class DataSeeder implements CommandLineRunner {
 
         // 3.3. Sinh viên
         User sinhVien = ensureUser("sv01", "Vũ Đức Long", "longvd@abc.com", "SV001", studentRole, cntt);
+
+        // 3.4. Sinh viên & quản lý bổ sung (idempotent) ──────────────────────────
+        seedBulkUsers(studentRole, managerRole, cntt, kinhTe);
+
+        // 3.5. Categories + Templates + Items bổ sung (idempotent) ──────────────
+        seedBulkResources(cntt, kinhTe);
 
         // ==========================================
         // 4. KHỞI TẠO DỮ LIỆU MƯỢN TRẢ (Slot, Thiết bị, Booking)
@@ -227,6 +235,171 @@ public class DataSeeder implements CommandLineRunner {
                     .build();
             return userRepository.save(u);
         });
+    }
+
+    // ============== BULK SEEDERS ==============
+
+    /**
+     * Seed thêm ~20 sinh viên + 2 quản lý dự phòng — chia đều cho 2 khoa.
+     * Idempotent: dùng ensureUser (check username).
+     */
+    private void seedBulkUsers(Role studentRole, Role managerRole,
+                               OrganizationUnit cntt, OrganizationUnit kinhTe) {
+        // [username, fullName, email, studentCode, unit]
+        Object[][] students = new Object[][] {
+                {"sv02", "Nguyễn Văn An",      "anvn@abc.com",      "SV002", cntt},
+                {"sv03", "Trần Thị Bình",      "binhtt@abc.com",    "SV003", cntt},
+                {"sv04", "Lê Hoàng Cường",     "cuonglh@abc.com",   "SV004", cntt},
+                {"sv05", "Phạm Minh Dũng",     "dungpm@abc.com",    "SV005", cntt},
+                {"sv06", "Hoàng Thị Hà",       "haht@abc.com",      "SV006", cntt},
+                {"sv07", "Đỗ Văn Khoa",        "khoadv@abc.com",    "SV007", cntt},
+                {"sv08", "Bùi Thanh Lan",      "lanbt@abc.com",     "SV008", cntt},
+                {"sv09", "Vũ Quốc Nam",        "namvq@abc.com",     "SV009", cntt},
+                {"sv10", "Đặng Thị Nga",       "ngadt@abc.com",     "SV010", cntt},
+                {"sv11", "Mai Văn Phú",        "phumv@abc.com",     "SV011", cntt},
+                {"sv12", "Ngô Thị Quyên",      "quyennt@abc.com",   "SV012", kinhTe},
+                {"sv13", "Tô Văn Sơn",         "sontv@abc.com",     "SV013", kinhTe},
+                {"sv14", "Phan Thị Tâm",       "tampt@abc.com",     "SV014", kinhTe},
+                {"sv15", "Lý Văn Tùng",        "tunglv@abc.com",    "SV015", kinhTe},
+                {"sv16", "Trịnh Thị Uyên",     "uyentt@abc.com",    "SV016", kinhTe},
+                {"sv17", "Đinh Văn Vũ",        "vudv@abc.com",      "SV017", kinhTe},
+                {"sv18", "Nguyễn Thị Xuân",    "xuannt@abc.com",    "SV018", kinhTe},
+                {"sv19", "Hồ Văn Yên",         "yenhv@abc.com",     "SV019", kinhTe},
+                {"sv20", "Lương Thị Hằng",     "hanglt@abc.com",    "SV020", kinhTe},
+                {"sv21", "Đoàn Văn Huy",       "huydv@abc.com",     "SV021", kinhTe},
+        };
+        int added = 0;
+        for (Object[] s : students) {
+            if (userRepository.findByUsername((String) s[0]).isEmpty()) {
+                ensureUser((String) s[0], (String) s[1], (String) s[2], (String) s[3],
+                        studentRole, (OrganizationUnit) s[4]);
+                added++;
+            }
+        }
+
+        if (userRepository.findByUsername("mng_cntt2").isEmpty()) {
+            ensureUser("mng_cntt2", "Phụ trách kho CNTT",
+                    "kho_cntt@abc.com", "MNG003", managerRole, cntt);
+            added++;
+        }
+        if (userRepository.findByUsername("mng_kt2").isEmpty()) {
+            ensureUser("mng_kt2", "Phụ trách kho Kinh Tế",
+                    "kho_kt@abc.com", "MNG004", managerRole, kinhTe);
+            added++;
+        }
+        if (added > 0) {
+            System.out.println("✅ Đã seed thêm " + added + " user (mật khẩu mặc định: 123456).");
+        }
+    }
+
+    /**
+     * Seed thêm category + template + item — chia đều 2 khoa.
+     * Idempotent: category check theo tên, template check theo (name + unit),
+     * item check theo serialNumber.
+     */
+    private void seedBulkResources(OrganizationUnit cntt, OrganizationUnit kinhTe) {
+        Category catMayChieu = ensureCategory("Máy chiếu", "Thiết bị trình chiếu cho phòng học / hội thảo");
+        Category catLaptop   = ensureCategory("Laptop",     "Máy tính xách tay phục vụ giảng dạy & demo");
+        Category catCamera   = ensureCategory("Camera",     "Webcam / camera ghi hình");
+        Category catLoa      = ensureCategory("Loa & Âm thanh", "Loa kéo, loa di động phục vụ sự kiện");
+        Category catMic      = ensureCategory("Micro",      "Micro có dây và không dây");
+        Category catPhuKien  = ensureCategory("Phụ kiện",   "Tripod, dây nguồn, remote, phụ kiện đi kèm");
+
+        // Templates [name, description, category, unit, imageUrl, autoApprove]
+        ResourceTemplate tplMayChieu   = ensureTemplate("Máy chiếu Epson EB-X41",
+                "Độ phân giải XGA 1024×768, 3600 ANSI lumens.",
+                catMayChieu, cntt, false);
+        ResourceTemplate tplLaptop     = ensureTemplate("Laptop Dell Latitude 5420",
+                "Core i5-1135G7, RAM 16GB, SSD 512GB.",
+                catLaptop, cntt, false);
+        ResourceTemplate tplWebcam     = ensureTemplate("Webcam Logitech C920",
+                "Full HD 1080p, mic kép, dùng cho dạy học trực tuyến.",
+                catCamera, cntt, true);
+        ResourceTemplate tplLoaKeo     = ensureTemplate("Loa kéo JBL EON One Compact",
+                "Loa di động pin sạc, 8 giờ phát liên tục, có Bluetooth.",
+                catLoa, kinhTe, false);
+        ResourceTemplate tplMicroShure = ensureTemplate("Micro không dây Shure BLX24",
+                "Set micro không dây 2 cầm tay, tần số UHF.",
+                catMic, kinhTe, false);
+        ResourceTemplate tplTripod     = ensureTemplate("Tripod Manfrotto 290",
+                "Chân máy quay/máy chiếu, tải trọng 5kg.",
+                catPhuKien, kinhTe, true);
+
+        // Items: [serial, template, unit]
+        Object[][] items = new Object[][] {
+                {"SN-EPS-001", tplMayChieu, cntt},
+                {"SN-EPS-002", tplMayChieu, cntt},
+                {"SN-EPS-003", tplMayChieu, cntt},
+                {"SN-EPS-004", tplMayChieu, cntt},
+                {"SN-EPS-005", tplMayChieu, cntt},
+                {"SN-LAP-001", tplLaptop,   cntt},
+                {"SN-LAP-002", tplLaptop,   cntt},
+                {"SN-LAP-003", tplLaptop,   cntt},
+                {"SN-LAP-004", tplLaptop,   cntt},
+                {"SN-LAP-005", tplLaptop,   cntt},
+                {"SN-WEB-001", tplWebcam,   cntt},
+                {"SN-WEB-002", tplWebcam,   cntt},
+                {"SN-WEB-003", tplWebcam,   cntt},
+                {"SN-WEB-004", tplWebcam,   cntt},
+                {"SN-LOA-003", tplLoaKeo,   kinhTe},
+                {"SN-LOA-004", tplLoaKeo,   kinhTe},
+                {"SN-LOA-005", tplLoaKeo,   kinhTe},
+                {"SN-LOA-006", tplLoaKeo,   kinhTe},
+                {"SN-LOA-007", tplLoaKeo,   kinhTe},
+                {"SN-MIC-001", tplMicroShure, kinhTe},
+                {"SN-MIC-002", tplMicroShure, kinhTe},
+                {"SN-MIC-003", tplMicroShure, kinhTe},
+                {"SN-MIC-004", tplMicroShure, kinhTe},
+                {"SN-TRI-001", tplTripod,     kinhTe},
+                {"SN-TRI-002", tplTripod,     kinhTe},
+                {"SN-TRI-003", tplTripod,     kinhTe},
+        };
+        int newItems = 0;
+        for (Object[] row : items) {
+            String serial = (String) row[0];
+            if (resourceItemRepository.findBySerialNumber(serial).isEmpty()) {
+                ResourceItem item = ResourceItem.builder()
+                        .serialNumber(serial)
+                        .status("AVAILABLE")
+                        .conditionStatus("GOOD")
+                        .template((ResourceTemplate) row[1])
+                        .managedByUnit((OrganizationUnit) row[2])
+                        .build();
+                resourceItemRepository.save(item);
+                newItems++;
+            }
+        }
+        if (newItems > 0) {
+            System.out.println("✅ Đã seed thêm " + newItems + " thiết bị mới trên 6 mẫu (template).");
+        }
+    }
+
+    private Category ensureCategory(String name, String desc) {
+        return categoryRepository.findAll().stream()
+                .filter(c -> name.equalsIgnoreCase(c.getCategoryName()))
+                .findFirst()
+                .orElseGet(() -> categoryRepository.save(
+                        Category.builder()
+                                .categoryName(name)
+                                .description(desc)
+                                .status("ACTIVE")
+                                .build()));
+    }
+
+    private ResourceTemplate ensureTemplate(String name, String desc, Category cat,
+                                            OrganizationUnit unit, boolean autoApprove) {
+        return resourceTemplateRepository.findAll().stream()
+                .filter(t -> name.equalsIgnoreCase(t.getName())
+                        && t.getUnit() != null && unit.getId().equals(t.getUnit().getId()))
+                .findFirst()
+                .orElseGet(() -> resourceTemplateRepository.save(
+                        ResourceTemplate.builder()
+                                .name(name)
+                                .description(desc)
+                                .category(cat)
+                                .unit(unit)
+                                .isAutoApprove(autoApprove)
+                                .build()));
     }
 
     private void ensureAdmin(Role adminRole, OrganizationUnit unit) {
