@@ -41,6 +41,12 @@ public class UserController {
         return ResponseEntity.ok(userService.getStudents(keyword, pageable));
     }
 
+    @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<UserResponse> getMyProfile() {
+        return ResponseEntity.ok(userService.getMyProfile());
+    }
+
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('USER_MANAGE')")
     public ResponseEntity<UserResponse> getUserById(@PathVariable String id) {

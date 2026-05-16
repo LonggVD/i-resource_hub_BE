@@ -12,6 +12,7 @@ import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.RoleRepository;
 import com.example.i_resource_hub.repository.UserRepository;
 import com.example.i_resource_hub.repository.specification.UserSpecification;
+import com.example.i_resource_hub.security.CustomUserDetails;
 import jakarta.mail.MessagingException;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -58,6 +60,19 @@ public class UserService {
     public UserResponse getUserById(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng với ID: " + id));
+        return mapToUserResponse(user);
+    }
+
+    /**
+     * Lấy hồ sơ của user đang đăng nhập từ SecurityContext.
+     * Khác với getUserById: endpoint /me chỉ yêu cầu đã đăng nhập, không cần USER_MANAGE.
+     */
+    @Transactional(readOnly = true)
+    public UserResponse getMyProfile() {
+        CustomUserDetails principal = (CustomUserDetails) SecurityContextHolder.getContext()
+                .getAuthentication().getPrincipal();
+        User user = userRepository.findById(principal.getId())
+                .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng hiện tại"));
         return mapToUserResponse(user);
     }
 

@@ -259,11 +259,13 @@ public class BookingService {
                 .borrowerUnitName(booking.getUser() != null && booking.getUser().getUnit() != null
                         ? booking.getUser().getUnit().getUnitName()
                         : "Tự do")
-                .resourceItemId(booking.getResourceItem() != null ? booking.getResourceItem().getId() : null)
+                .resourceItemId(isItemBound(booking.getStatus()) && booking.getResourceItem() != null
+                        ? booking.getResourceItem().getId() : null)
                 .deviceName(booking.getResourceItem() != null && booking.getResourceItem().getTemplate() != null
                         ? booking.getResourceItem().getTemplate().getName()
                         : "Thiết bị không tên")
-                .serialNumber(booking.getResourceItem() != null ? booking.getResourceItem().getSerialNumber() : "")
+                .serialNumber(isItemBound(booking.getStatus()) && booking.getResourceItem() != null
+                        ? booking.getResourceItem().getSerialNumber() : "")
                 .bookingDate(booking.getBookingDate())
                 .slotId(booking.getSlot() != null ? booking.getSlot().getId() : null)
                 .slotName(booking.getSlot() != null ? booking.getSlot().getSlotName() : "")
@@ -527,26 +529,41 @@ public class BookingService {
     }
 
     private void performCheckIn(Booking booking, String newSerialNumber) {
-        // --- LOGIC SWAP (Đổi thiết bị) ---
+        // --- LOGIC BIND (Gắn máy thực tế khi giáo vụ quét QR) ---
         if (newSerialNumber != null && !newSerialNumber.trim().isEmpty()) {
             ResourceItem newItem = resourceItemRepository.findBySerialNumber(newSerialNumber)
                     .orElseThrow(() -> new RuntimeException("Không tìm thấy thiết bị có mã: " + newSerialNumber));
 
-            if (!"AVAILABLE".equalsIgnoreCase(newItem.getStatus())
-                    && !newItem.getId().equals(booking.getResourceItem().getId())) {
+            ResourceItem oldItem = booking.getResourceItem();
+            boolean sameAsPreAssigned = oldItem != null && newItem.getId().equals(oldItem.getId());
+
+            // Kiểm tra loại thiết bị phải khớp với đơn mượn (tránh scan nhầm thiết bị khác)
+            if (oldItem != null && oldItem.getTemplate() != null && newItem.getTemplate() != null
+                    && !oldItem.getTemplate().getId().equals(newItem.getTemplate().getId())) {
+                throw new RuntimeException("Thiết bị " + newSerialNumber
+                        + " không cùng loại với đơn mượn (yêu cầu: " + oldItem.getTemplate().getName() + ")");
+            }
+
+            // Trừ trường hợp scan đúng máy đã pre-assign, máy phải đang AVAILABLE
+            if (!sameAsPreAssigned && !"AVAILABLE".equalsIgnoreCase(newItem.getStatus())) {
                 throw new RuntimeException("Thiết bị " + newSerialNumber + " hiện không sẵn sàng (Trạng thái: "
                         + newItem.getStatus() + ")");
             }
 
-            if (!newItem.getId().equals(booking.getResourceItem().getId())) {
-                ResourceItem oldItem = booking.getResourceItem();
-                oldItem.setStatus("AVAILABLE");
-                resourceItemRepository.save(oldItem);
-
+            if (!sameAsPreAssigned) {
+                // oldItem là gợi ý nội bộ — status đang AVAILABLE (chưa bàn giao đơn này),
+                // không cần đụng. Nếu oldItem đã IN_USE/BORROWED nghĩa là một booking khác
+                // đã quét và đang dùng chính máy này — tuyệt đối không reset.
                 booking.setResourceItem(newItem);
                 newItem.setStatus("BORROWED");
                 resourceItemRepository.save(newItem);
             }
+        }
+
+        // Sau bước trên, booking phải có resource_item — không cho phép handover mà không bind
+        if (booking.getResourceItem() == null) {
+            throw new RuntimeException("Đơn mượn chưa được gán thiết bị thực tế. "
+                    + "Vui lòng quét QR thiết bị trước khi bàn giao.");
         }
 
         // Kiểm tra thời gian
@@ -791,6 +808,17 @@ public class BookingService {
 
         // Nếu hiện tại đã quá giờ kết thúc ca mượn
         return now.isAfter(slotEndTime);
+    }
+
+    /**
+     * Một booking được coi là "đã bind máy thực tế" khi nó đã đi qua khâu bàn giao
+     * (giáo vụ scan QR thiết bị). Trước đó, resource_item gắn vào booking chỉ là
+     * một gợi ý nội bộ phục vụ tính tồn kho — không nên expose serial cho người dùng.
+     */
+    private boolean isItemBound(String status) {
+        return "BORROWED".equalsIgnoreCase(status)
+                || "RETURNED".equalsIgnoreCase(status)
+                || "OVERDUE".equalsIgnoreCase(status);
     }
 
     /**
