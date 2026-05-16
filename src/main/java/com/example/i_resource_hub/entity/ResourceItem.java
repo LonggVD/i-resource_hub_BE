@@ -1,8 +1,10 @@
 package com.example.i_resource_hub.entity;
 
 import com.example.i_resource_hub.entity.base.BaseEntity;
+import com.example.i_resource_hub.entity.listener.EntityChangeListener;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
@@ -17,6 +19,7 @@ import java.time.LocalDate;
 
 @Entity
 @Table(name = "resource_items")
+@EntityListeners(EntityChangeListener.class)
 @Getter
 @Setter
 @NoArgsConstructor

@@ -1,8 +1,10 @@
 package com.example.i_resource_hub.entity;
 
 import com.example.i_resource_hub.entity.base.BaseEntity;
+import com.example.i_resource_hub.entity.listener.EntityChangeListener;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.JoinTable;
@@ -30,6 +32,7 @@ import java.util.Set;
         columnNames = {"resource_item_id", "booking_date", "slot_id"}
     )
 })
+@EntityListeners(EntityChangeListener.class)
 @Getter
 @Setter
 @NoArgsConstructor

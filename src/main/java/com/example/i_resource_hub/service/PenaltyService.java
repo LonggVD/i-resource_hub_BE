@@ -93,6 +93,10 @@ public class PenaltyService {
                 title = "Bạn bị phạt do hư hỏng thiết bị";
                 body = "Bị trừ " + penaltyPoint + " điểm tín nhiệm. Điểm hiện tại: "
                         + refreshed.getCreditScore() + ". Vui lòng kiểm tra thiết bị kỹ trước khi sử dụng.";
+            } else if ("NO_SHOW".equals(penaltyType)) {
+                title = "Bạn bị phạt do không đến nhận thiết bị";
+                body = "Bị trừ " + penaltyPoint + " điểm tín nhiệm. Điểm hiện tại: "
+                        + refreshed.getCreditScore() + ". Lần sau nếu không cần mượn nữa, hãy chủ động huỷ đơn để bạn khác có thể dùng.";
             } else {
                 title = "Bạn nhận một án phạt mới";
                 body = description;

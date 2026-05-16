@@ -11,9 +11,15 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Component;
+
+import java.security.Principal;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Xác thực JWT khi client gửi STOMP CONNECT.
@@ -29,10 +35,29 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
     private final JWTUtils jwtUtils;
     private final UserDetailsServiceImpl userDetailsService;
 
+    /**
+     * Map mỗi topic protected → bộ authority chấp nhận được (chỉ cần khớp 1).
+     * Topic không nằm trong map: không cần check thêm (mặc định cho phép sau khi CONNECT auth).
+     */
+    private static final Set<String> MANAGER_AUTHORITIES = Set.of(
+            "ADMIN", "ROLE_ADMIN", "RESOURCE_MANAGE", "ROLE_MANAGER");
+    private static final Map<String, Set<String>> PROTECTED_TOPICS = Map.of(
+            "/topic/dashboard", MANAGER_AUTHORITIES,
+            "/topic/bookings-board-changed", Set.of("BOOKING_APPROVE"));
+
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-        if (accessor == null || !StompCommand.CONNECT.equals(accessor.getCommand())) {
+        if (accessor == null) {
+            return message;
+        }
+
+        if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+            authorizeSubscribe(accessor);
+            return message;
+        }
+
+        if (!StompCommand.CONNECT.equals(accessor.getCommand())) {
             return message;
         }
 
@@ -59,5 +84,23 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         }
 
         return message;
+    }
+
+    private void authorizeSubscribe(StompHeaderAccessor accessor) {
+        String destination = accessor.getDestination();
+        if (destination == null) return;
+        Set<String> required = PROTECTED_TOPICS.get(destination);
+        if (required == null) return;
+
+        Principal user = accessor.getUser();
+        if (!(user instanceof Authentication auth) || !auth.isAuthenticated()) {
+            throw new AccessDeniedException("Cần đăng nhập để subscribe " + destination);
+        }
+        boolean allowed = auth.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(required::contains);
+        if (!allowed) {
+            throw new AccessDeniedException("Không có quyền subscribe " + destination);
+        }
     }
 }

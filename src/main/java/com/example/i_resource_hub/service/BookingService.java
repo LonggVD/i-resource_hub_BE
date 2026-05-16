@@ -47,6 +47,9 @@ public class BookingService {
     @Value("${penalty.points.damage:30}")
     private int damagePenaltyPoint;
 
+    @Value("${penalty.points.no-show:5}")
+    private int noShowPenaltyPoint;
+
     @Value("${penalty.late-return.grace-minutes:30}")
     private int lateReturnGraceMinutes;
 
@@ -786,10 +789,36 @@ public class BookingService {
 
                 bookingRepository.save(booking);
                 saveHistory(booking, oldStatus, "CANCELLED", null, "Hệ thống tự động dọn dẹp đơn quá hạn");
-                notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
-                        "Đơn mượn đã bị huỷ tự động",
-                        "Đơn " + describeBooking(booking)
-                                + " bị huỷ do quá giờ ca mượn. Vui lòng đặt lại nếu vẫn cần mượn.");
+
+                // Đơn APPROVED bị quá giờ ca = sinh viên đã được duyệt nhưng KHÔNG đến nhận đồ.
+                // → ghi NO_SHOW (trừ điểm nhẹ). Còn PENDING không phạt vì có thể do quản lý chưa kịp duyệt.
+                if ("APPROVED".equalsIgnoreCase(oldStatus) && booking.getUser() != null) {
+                    String desc = String.format(
+                            "Sinh viên không đến nhận thiết bị %s (ca %s ngày %s) — đơn tự huỷ.",
+                            booking.getResourceItem() != null
+                                    && booking.getResourceItem().getTemplate() != null
+                                            ? booking.getResourceItem().getTemplate().getName()
+                                            : "không xác định",
+                            booking.getSlot() != null ? booking.getSlot().getSlotName() : "?",
+                            booking.getBookingDate());
+                    try {
+                        penaltyService.createSystemPenalty(
+                                booking.getUser(), booking, "NO_SHOW", noShowPenaltyPoint, desc);
+                    } catch (Exception ex) {
+                        log.warn("Không tạo được NO_SHOW penalty cho booking {}: {}",
+                                booking.getId(), ex.getMessage());
+                    }
+                    notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
+                            "Đơn mượn đã bị huỷ — bạn bị phạt NO_SHOW",
+                            "Đơn " + describeBooking(booking)
+                                    + " đã được duyệt nhưng bạn không đến nhận đồ trước khi ca kết thúc. "
+                                    + "Bị trừ " + noShowPenaltyPoint + " điểm tín nhiệm.");
+                } else {
+                    notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
+                            "Đơn mượn đã bị huỷ tự động",
+                            "Đơn " + describeBooking(booking)
+                                    + " bị huỷ do quá giờ ca mượn. Vui lòng đặt lại nếu vẫn cần mượn.");
+                }
                 count++;
             }
         }
