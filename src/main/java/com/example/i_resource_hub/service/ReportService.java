@@ -2,6 +2,7 @@ package com.example.i_resource_hub.service;
 
 import com.example.i_resource_hub.entity.Booking;
 import com.example.i_resource_hub.repository.BookingRepository;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import com.lowagie.text.Document;
 import com.lowagie.text.Element;
 import com.lowagie.text.Font;
@@ -41,6 +42,7 @@ import java.util.List;
 public class ReportService {
 
     private final BookingRepository bookingRepository;
+    private final AuthorizationHelper authHelper;
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
 
@@ -54,7 +56,9 @@ public class ReportService {
     // ═══════════════════════════════════════════════════════════
     @Transactional(readOnly = true)
     public byte[] generateBookingExcel(LocalDate from, LocalDate to) throws IOException {
-        List<Booking> bookings = bookingRepository.findByBookingDateBetween(from, to);
+        // Admin: unitId null = không filter. Manager: chỉ booking trong khoa mình.
+        List<Booking> bookings = bookingRepository.findByBookingDateBetweenAndUnitScope(
+                from, to, authHelper.getScopedUnitIdOrNull());
 
         try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Sheet sheet = wb.createSheet("Bao cao don muon");
@@ -130,7 +134,8 @@ public class ReportService {
     // ═══════════════════════════════════════════════════════════
     @Transactional(readOnly = true)
     public byte[] generateBookingPdf(LocalDate from, LocalDate to) {
-        List<Booking> bookings = bookingRepository.findByBookingDateBetween(from, to);
+        List<Booking> bookings = bookingRepository.findByBookingDateBetweenAndUnitScope(
+                from, to, authHelper.getScopedUnitIdOrNull());
 
         try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             Document doc = new Document(PageSize.A4.rotate(), 30, 30, 30, 30);

@@ -15,6 +15,13 @@ public interface PenaltyRepository extends JpaRepository<Penalty, String> {
 
     List<Penalty> findByIsDeletedFalseOrderByCreatedAtDesc();
 
+    /** Lấy penalties của users thuộc unit. unitId null = admin (lấy tất cả). */
+    @Query("SELECT p FROM Penalty p LEFT JOIN p.user u " +
+           "WHERE p.isDeleted = false " +
+           "AND (:unitId IS NULL OR u.unit.id = :unitId) " +
+           "ORDER BY p.createdAt DESC")
+    List<Penalty> findByUnitScope(@Param("unitId") String unitId);
+
     List<Penalty> findByUserIdAndStatusAndIsDeletedFalse(String userId, String status);
 
     @Query("SELECT COALESCE(SUM(p.penaltyPoint), 0) FROM Penalty p WHERE p.user.id = :userId AND p.status = 'ACTIVE' AND p.isDeleted = false")

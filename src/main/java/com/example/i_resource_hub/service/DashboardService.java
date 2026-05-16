@@ -6,6 +6,7 @@ import com.example.i_resource_hub.dto.response.OverdueRemindResponse;
 import com.example.i_resource_hub.entity.Booking;
 import com.example.i_resource_hub.repository.BookingRepository;
 import com.example.i_resource_hub.repository.ResourceItemRepository;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,20 +29,25 @@ public class DashboardService {
     private final BookingRepository bookingRepository;
     private final ResourceItemRepository resourceItemRepository;
     private final EmailService emailService;
+    private final AuthorizationHelper authHelper;
 
     @Transactional(readOnly = true)
     public DashboardResponse getDashboardStats() {
 
+        // Admin: unitId = null = không filter (xem toàn hệ thống).
+        // Manager/giáo vụ: chỉ xem trong unit của mình.
+        String unitId = authHelper.getScopedUnitIdOrNull();
+
         // 1. Chỉ số tổng quan
-        long totalEquipment = resourceItemRepository.countByIsDeletedFalse();
-        long availableEquipment = resourceItemRepository.countByIsDeletedFalseAndStatus("AVAILABLE");
-        long inUseEquipment = resourceItemRepository.countByIsDeletedFalseAndStatus("IN_USE");
-        long brokenEquipment = resourceItemRepository.countByIsDeletedFalseAndStatus("BROKEN");
-        long pendingBookings = bookingRepository.countByStatus("PENDING");
+        long totalEquipment = resourceItemRepository.countByUnitScope(unitId);
+        long availableEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "AVAILABLE");
+        long inUseEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "IN_USE");
+        long brokenEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "BROKEN");
+        long pendingBookings = bookingRepository.countByStatusAndUnitScope("PENDING", unitId);
 
         // 2. Biểu đồ trạng thái thiết bị
-        long maintenanceEquipment = resourceItemRepository.countByIsDeletedFalseAndStatus("MAINTENANCE");
-        long lostEquipment = resourceItemRepository.countByIsDeletedFalseAndStatus("LOST");
+        long maintenanceEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "MAINTENANCE");
+        long lostEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "LOST");
 
         DashboardResponse.EquipmentStatusChart equipmentStatusChart = DashboardResponse.EquipmentStatusChart.builder()
                 .available(availableEquipment)
@@ -53,7 +59,7 @@ public class DashboardService {
 
         // 3. Biểu đồ mượn theo ngày (7 ngày qua)
         LocalDate startDate = LocalDate.now().minusDays(6);
-        List<Object[]> bookingsByDateRaw = bookingRepository.countBookingsByDate(startDate);
+        List<Object[]> bookingsByDateRaw = bookingRepository.countBookingsByDateAndUnitScope(startDate, unitId);
         
         List<String> labels = new ArrayList<>();
         List<Long> chartData = new ArrayList<>();
@@ -86,7 +92,7 @@ public class DashboardService {
                 .build();
 
         // 4. Top 5 thiết bị
-        List<Object[]> topEquipRaw = bookingRepository.findTopBorrowedTemplates();
+        List<Object[]> topEquipRaw = bookingRepository.findTopBorrowedTemplatesByUnitScope(unitId);
         List<DashboardResponse.TopEquipment> topEquips = topEquipRaw.stream()
                 .limit(5)
                 .map(row -> DashboardResponse.TopEquipment.builder()
@@ -96,7 +102,7 @@ public class DashboardService {
                 .collect(Collectors.toList());
 
         // 5. Mượn quá hạn
-        List<Booking> candidates = bookingRepository.findOverdueCandidates(LocalDate.now());
+        List<Booking> candidates = bookingRepository.findOverdueCandidatesByUnitScope(LocalDate.now(), unitId);
         List<DashboardResponse.OverdueBooking> overdues = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now();
 
@@ -146,6 +152,28 @@ public class DashboardService {
         List<String> failed = new ArrayList<>();
         int sent = 0;
 
+        // Các id client gửi mà DB không tìm thấy → skip ngay (làm trước filter unit
+        // để không bị nhầm vào "ngoài đơn vị").
+        List<String> foundIds = bookings.stream().map(Booking::getId).collect(Collectors.toList());
+        for (String id : ids) {
+            if (!foundIds.contains(id)) skipped.add(id);
+        }
+
+        // Filter ngoài-unit: manager chỉ gửi nhắc cho SV trong unit mình.
+        // Admin (unitId null) thì giữ nguyên.
+        String scopedUnitId = authHelper.getScopedUnitIdOrNull();
+        if (scopedUnitId != null) {
+            List<Booking> inScope = new ArrayList<>();
+            for (Booking b : bookings) {
+                if (belongsToUnit(b, scopedUnitId)) {
+                    inScope.add(b);
+                } else {
+                    skipped.add(b.getId());
+                }
+            }
+            bookings = inScope;
+        }
+
         LocalDateTime now = LocalDateTime.now();
         DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy");
 
@@ -187,19 +215,24 @@ public class DashboardService {
             }
         }
 
-        // Các id client gửi mà DB không tìm thấy
-        if (bookings.size() < ids.size()) {
-            List<String> foundIds = bookings.stream().map(Booking::getId).collect(Collectors.toList());
-            for (String id : ids) {
-                if (!foundIds.contains(id)) skipped.add(id);
-            }
-        }
-
         return OverdueRemindResponse.builder()
                 .requested(ids.size())
                 .sent(sent)
                 .skippedBookingIds(skipped)
                 .failedBookingIds(failed)
                 .build();
+    }
+
+    /** Cùng pattern với BookingRepository#findAllByUnitId: match nếu unitId khớp 1 trong 3 đường (managedByUnit, item.managedByUnit, item.template.unit). */
+    private boolean belongsToUnit(Booking b, String unitId) {
+        if (b.getManagedByUnit() != null && unitId.equals(b.getManagedByUnit().getId())) return true;
+        if (b.getResourceItem() != null) {
+            if (b.getResourceItem().getManagedByUnit() != null
+                    && unitId.equals(b.getResourceItem().getManagedByUnit().getId())) return true;
+            if (b.getResourceItem().getTemplate() != null
+                    && b.getResourceItem().getTemplate().getUnit() != null
+                    && unitId.equals(b.getResourceItem().getTemplate().getUnit().getId())) return true;
+        }
+        return false;
     }
 }

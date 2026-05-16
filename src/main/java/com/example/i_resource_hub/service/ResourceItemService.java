@@ -11,6 +11,7 @@ import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.ResourceItemRepository;
 import com.example.i_resource_hub.repository.ResourceTemplateRepository;
 import com.example.i_resource_hub.repository.specification.ResourceItemSpecification;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.jpa.domain.Specification;
@@ -29,10 +30,11 @@ public class ResourceItemService {
     private final ResourceItemRepository resourceItemRepository;
     private final ResourceTemplateRepository resourceTemplateRepository;
     private final OrganizationUnitRepository organizationUnitRepository;
+    private final AuthorizationHelper authHelper;
 
     @Transactional(readOnly = true)
     public List<ResourceItemResponse> getAllActive() {
-        return resourceItemRepository.findAllByIsDeletedFalse().stream()
+        return resourceItemRepository.findAllActiveByUnitScope(authHelper.getScopedUnitIdOrNull()).stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -40,8 +42,10 @@ public class ResourceItemService {
     @Transactional(readOnly = true)
     public List<ResourceItemResponse> filter(String templateId, String unitId, String status,
                                              String conditionStatus, String keyword) {
+        // Manager: ép unit của mình, bỏ qua unitId client truyền. Admin: tôn trọng param.
+        String effectiveUnitId = authHelper.isAdmin() ? unitId : authHelper.getCurrentUnitId();
         Specification<ResourceItem> spec = ResourceItemSpecification.filter(
-                templateId, unitId, status, conditionStatus, keyword);
+                templateId, effectiveUnitId, status, conditionStatus, keyword);
         return resourceItemRepository.findAll(spec).stream()
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
@@ -51,6 +55,7 @@ public class ResourceItemService {
     public ResourceItemResponse getById(String id) {
         ResourceItem item = resourceItemRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy thiết bị với ID: " + id));
+        requireSameUnitOrAdminFor(item);
         return mapToResponse(item);
     }
 
@@ -59,6 +64,7 @@ public class ResourceItemService {
         ResourceItem item = resourceItemRepository.findBySerialNumber(serialNumber)
                 .orElseThrow(
                         () -> new EntityNotFoundException("Không tìm thấy thiết bị với số Serial: " + serialNumber));
+        requireSameUnitOrAdminFor(item);
         return mapToResponse(item);
     }
 
@@ -71,6 +77,12 @@ public class ResourceItemService {
         ResourceTemplate template = resourceTemplateRepository.findById(request.getTemplateId())
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy mẫu tài nguyên!"));
 
+        // Manager: ép unit = unit của mình. Admin: theo request.
+        String targetUnitId = authHelper.isAdmin() ? request.getUnitId() : authHelper.getCurrentUnitId();
+        if (!authHelper.isAdmin() && targetUnitId == null) {
+            throw new RuntimeException("Tài khoản chưa được gán đơn vị, không thể tạo thiết bị");
+        }
+
         ResourceItem item = ResourceItem.builder()
                 .template(template)
                 .serialNumber(request.getSerialNumber())
@@ -80,8 +92,8 @@ public class ResourceItemService {
                 .status(request.getStatus() != null ? request.getStatus() : "AVAILABLE")
                 .build();
 
-        if (request.getUnitId() != null) {
-            item.setManagedByUnit(organizationUnitRepository.findById(request.getUnitId()).orElse(null));
+        if (targetUnitId != null) {
+            item.setManagedByUnit(organizationUnitRepository.findById(targetUnitId).orElse(null));
         }
 
         return mapToResponse(resourceItemRepository.save(item));
@@ -91,6 +103,12 @@ public class ResourceItemService {
     public List<ResourceItemResponse> batchCreate(ResourceItemBatchCreateRequest request) {
         ResourceTemplate template = resourceTemplateRepository.findById(request.getTemplateId())
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy mẫu tài nguyên!"));
+
+        // Manager: ép unit = unit của mình. Admin: theo request.
+        String targetUnitId = authHelper.isAdmin() ? request.getUnitId() : authHelper.getCurrentUnitId();
+        if (!authHelper.isAdmin() && targetUnitId == null) {
+            throw new RuntimeException("Tài khoản chưa được gán đơn vị, không thể tạo thiết bị");
+        }
 
         List<ResourceItem> items = new ArrayList<>();
         for (String sn : request.getSerialNumbers()) {
@@ -105,8 +123,8 @@ public class ResourceItemService {
                     .status(request.getStatus() != null ? request.getStatus() : "AVAILABLE")
                     .build();
 
-            if (request.getUnitId() != null) {
-                item.setManagedByUnit(organizationUnitRepository.findById(request.getUnitId()).orElse(null));
+            if (targetUnitId != null) {
+                item.setManagedByUnit(organizationUnitRepository.findById(targetUnitId).orElse(null));
             }
             items.add(item);
         }
@@ -120,6 +138,7 @@ public class ResourceItemService {
     public ResourceItemResponse update(String id, ResourceItemUpdateRequest request) {
         ResourceItem item = resourceItemRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy thiết bị!"));
+        requireSameUnitOrAdminFor(item);
 
         if (request.getSerialNumber() != null && !request.getSerialNumber().equals(item.getSerialNumber())) {
             if (resourceItemRepository.findBySerialNumber(request.getSerialNumber()).isPresent()) {
@@ -144,6 +163,7 @@ public class ResourceItemService {
     public void softDelete(String id) {
         ResourceItem item = resourceItemRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy thiết bị!"));
+        requireSameUnitOrAdminFor(item);
         item.setDeleted(true);
         resourceItemRepository.save(item);
     }
@@ -152,8 +172,23 @@ public class ResourceItemService {
     public void restore(String id) {
         ResourceItem item = resourceItemRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy thiết bị!"));
+        requireSameUnitOrAdminFor(item);
         item.setDeleted(false);
         resourceItemRepository.save(item);
+    }
+
+    /** Lấy unit thực sự của item: managedByUnit hoặc fallback template.unit. */
+    private String effectiveUnitId(ResourceItem item) {
+        if (item.getManagedByUnit() != null) return item.getManagedByUnit().getId();
+        if (item.getTemplate() != null && item.getTemplate().getUnit() != null) {
+            return item.getTemplate().getUnit().getId();
+        }
+        return null;
+    }
+
+    private void requireSameUnitOrAdminFor(ResourceItem item) {
+        authHelper.requireSameUnitOrAdmin(effectiveUnitId(item),
+                "thiết bị " + item.getSerialNumber());
     }
 
     private ResourceItemResponse mapToResponse(ResourceItem item) {

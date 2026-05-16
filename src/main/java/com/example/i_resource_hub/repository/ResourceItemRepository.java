@@ -30,6 +30,36 @@ public interface ResourceItemRepository
 
         long countByIsDeletedFalseAndStatus(String status);
 
+        // ===== Unit-scoped (admin truyền null = không filter) =====
+        // 1 item "thuộc unit" nếu managedByUnit trực tiếp khớp, HOẶC
+        // template của item có unit khớp (fallback) — pattern y hệt BookingService.getEffectiveUnit.
+
+        @Query("SELECT COUNT(i) FROM ResourceItem i " +
+                        "LEFT JOIN i.managedByUnit u1 " +
+                        "LEFT JOIN i.template t " +
+                        "LEFT JOIN t.unit u2 " +
+                        "WHERE i.isDeleted = false " +
+                        "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId)")
+        long countByUnitScope(@Param("unitId") String unitId);
+
+        @Query("SELECT COUNT(i) FROM ResourceItem i " +
+                        "LEFT JOIN i.managedByUnit u1 " +
+                        "LEFT JOIN i.template t " +
+                        "LEFT JOIN t.unit u2 " +
+                        "WHERE i.isDeleted = false " +
+                        "AND i.status = :status " +
+                        "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId)")
+        long countByUnitScopeAndStatus(@Param("unitId") String unitId,
+                        @Param("status") String status);
+
+        @Query("SELECT DISTINCT i FROM ResourceItem i " +
+                        "LEFT JOIN i.managedByUnit u1 " +
+                        "LEFT JOIN i.template t " +
+                        "LEFT JOIN t.unit u2 " +
+                        "WHERE i.isDeleted = false " +
+                        "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId)")
+        List<ResourceItem> findAllActiveByUnitScope(@Param("unitId") String unitId);
+
         @Query("SELECT i FROM ResourceItem i WHERE i.template.id = :templateId " +
                         "AND i.isDeleted = false " +
                         "AND i.status NOT IN ('BROKEN', 'MAINTENANCE', 'LOST') " +

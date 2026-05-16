@@ -12,6 +12,7 @@ import com.example.i_resource_hub.repository.OrganizationUnitRepository;
 import com.example.i_resource_hub.repository.RoleRepository;
 import com.example.i_resource_hub.repository.UserRepository;
 import com.example.i_resource_hub.repository.specification.UserSpecification;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import com.example.i_resource_hub.security.CustomUserDetails;
 import jakarta.mail.MessagingException;
 import jakarta.persistence.EntityNotFoundException;
@@ -41,10 +42,14 @@ public class UserService {
     private final OrganizationUnitRepository unitRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
+    private final AuthorizationHelper authHelper;
 
     @Transactional(readOnly = true)
     public Page<UserResponse> getPageUsers(String keyword, String unitId, String status, String roleId, Pageable pageable) {
-        Specification<User> spec = UserSpecification.filterUsers(keyword, unitId, status, roleId);
+        // Manager: FORCE unit của mình, bỏ qua param client gửi (không cho mượn unitId của khoa khác).
+        // Admin: tôn trọng param client gửi (có thể null = tất cả).
+        String effectiveUnitId = authHelper.isAdmin() ? unitId : authHelper.getCurrentUnitId();
+        Specification<User> spec = UserSpecification.filterUsers(keyword, effectiveUnitId, status, roleId);
         return userRepository.findAll(spec, pageable).map(this::mapToUserResponse);
     }
 
@@ -52,7 +57,8 @@ public class UserService {
     public Page<UserResponse> getStudents(String keyword, Pageable pageable) {
         Role studentRole = roleRepository.findByRoleCode("STUDENT")
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy vai trò sinh viên"));
-        Specification<User> spec = UserSpecification.filterUsers(keyword, null, "ACTIVE", studentRole.getId());
+        String scopedUnitId = authHelper.getScopedUnitIdOrNull(); // null = admin
+        Specification<User> spec = UserSpecification.filterUsers(keyword, scopedUnitId, "ACTIVE", studentRole.getId());
         return userRepository.findAll(spec, pageable).map(this::mapToUserResponse);
     }
 
@@ -60,6 +66,7 @@ public class UserService {
     public UserResponse getUserById(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng với ID: " + id));
+        requireSameUnitOrAdminFor(user);
         return mapToUserResponse(user);
     }
 
@@ -88,6 +95,13 @@ public class UserService {
             throw new RuntimeException("Mã sinh viên đã tồn tại!");
         }
 
+        // Manager: ép unit của user mới = unit của manager, không cho tạo cho khoa khác.
+        // Admin: tôn trọng unitId trong request.
+        String targetUnitId = authHelper.isAdmin() ? request.getUnitId() : authHelper.getCurrentUnitId();
+        if (!authHelper.isAdmin() && targetUnitId == null) {
+            throw new RuntimeException("Tài khoản chưa được gán đơn vị, không thể tạo người dùng");
+        }
+
         User user = new User();
         user.setUsername(request.getUsername());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
@@ -98,8 +112,8 @@ public class UserService {
         user.setCreditScore(100);
         user.setStatus("ACTIVE");
 
-        if (request.getUnitId() != null && !request.getUnitId().isEmpty()) {
-            OrganizationUnit unit = unitRepository.findById(request.getUnitId())
+        if (targetUnitId != null && !targetUnitId.isEmpty()) {
+            OrganizationUnit unit = unitRepository.findById(targetUnitId)
                     .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy đơn vị quản lý!"));
             user.setUnit(unit);
         }
@@ -116,6 +130,7 @@ public class UserService {
     public UserResponse updateUser(String id, UserRequest request) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
+        requireSameUnitOrAdminFor(user);
 
         if (userRepository.existsByEmail(request.getEmail()) && !user.getEmail().equals(request.getEmail())) {
             throw new RuntimeException("Email đã được sử dụng bởi người dùng khác!");
@@ -130,12 +145,16 @@ public class UserService {
             user.setPassword(passwordEncoder.encode(request.getPassword()));
         }
 
-        if (request.getUnitId() != null && !request.getUnitId().isEmpty()) {
-            OrganizationUnit unit = unitRepository.findById(request.getUnitId())
-                    .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy đơn vị quản lý!"));
-            user.setUnit(unit);
-        } else {
-            user.setUnit(null);
+        // Manager: không cho phép chuyển user sang khoa khác (giữ unit hiện tại).
+        // Admin: được phép đổi unit theo request.
+        if (authHelper.isAdmin()) {
+            if (request.getUnitId() != null && !request.getUnitId().isEmpty()) {
+                OrganizationUnit unit = unitRepository.findById(request.getUnitId())
+                        .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy đơn vị quản lý!"));
+                user.setUnit(unit);
+            } else {
+                user.setUnit(null);
+            }
         }
 
         if (request.getRoleIds() != null) {
@@ -150,13 +169,14 @@ public class UserService {
     public UserResponse toggleStatus(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
-        
+        requireSameUnitOrAdminFor(user);
+
         if ("ACTIVE".equals(user.getStatus())) {
             user.setStatus("LOCKED");
         } else {
             user.setStatus("ACTIVE");
         }
-        
+
         return mapToUserResponse(userRepository.save(user));
     }
 
@@ -164,6 +184,7 @@ public class UserService {
     public UserResponse approveUser(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
+        requireSameUnitOrAdminFor(user);
         user.setStatus("ACTIVE");
         User savedUser = userRepository.save(user);
 
@@ -180,6 +201,7 @@ public class UserService {
     public UserResponse rejectUser(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
+        requireSameUnitOrAdminFor(user);
         user.setStatus("REJECTED");
         User savedUser = userRepository.save(user);
 
@@ -196,11 +218,12 @@ public class UserService {
     public String resetPassword(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
-        
+        requireSameUnitOrAdminFor(user);
+
         String newPassword = generateRandomPassword();
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
-        
+
         return newPassword;
     }
 
@@ -208,7 +231,8 @@ public class UserService {
     public UserResponse updateCreditScore(String id, CreditScoreRequest request) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
-        
+        requireSameUnitOrAdminFor(user);
+
         int newScore = user.getCreditScore() + request.getAmount();
         user.setCreditScore(Math.max(0, newScore)); // Ensure score doesn't go below 0
         return mapToUserResponse(userRepository.save(user));
@@ -219,10 +243,18 @@ public class UserService {
     public void deleteUser(String id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Không tìm thấy người dùng!"));
-        
+        requireSameUnitOrAdminFor(user);
+
         user.setDeletedAt(LocalDateTime.now());
         user.setDeleted(true);
         userRepository.save(user);
+    }
+
+    /** Helper: throw nếu user hiện tại không phải admin và target user ở khoa khác. */
+    private void requireSameUnitOrAdminFor(User target) {
+        authHelper.requireSameUnitOrAdmin(
+                target.getUnit() != null ? target.getUnit().getId() : null,
+                "người dùng " + target.getUsername());
     }
 
 

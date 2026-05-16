@@ -8,6 +8,7 @@ import com.example.i_resource_hub.repository.BookingEvidenceRepository;
 import com.example.i_resource_hub.repository.BookingRepository;
 import com.example.i_resource_hub.repository.PenaltyRepository;
 import com.example.i_resource_hub.repository.UserRepository;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ public class PenaltyService {
     private final BookingRepository bookingRepository;
     private final BookingEvidenceRepository bookingEvidenceRepository;
     private final NotificationService notificationService;
+    private final AuthorizationHelper authHelper;
 
     /**
      * Tạo penalty do hệ thống tự sinh (BookingCleanupTask, checkOut khi DAMAGE...).
@@ -117,6 +119,11 @@ public class PenaltyService {
         User targetUser = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
 
+        // RBAC theo unit: manager chỉ phạt SV trong khoa mình. Admin được phép cross-unit.
+        authHelper.requireSameUnitOrAdmin(
+                targetUser.getUnit() != null ? targetUser.getUnit().getId() : null,
+                "sinh viên " + targetUser.getFullName());
+
         User adminUser = userRepository.findByUsername(adminUserId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy quản trị viên"));
 
@@ -183,15 +190,22 @@ public class PenaltyService {
     public PenaltyResponse getPenaltyById(String penaltyId) {
         Penalty penalty = penaltyRepository.findById(penaltyId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
+        authHelper.requireSameUnitOrAdmin(
+                penalty.getUser() != null && penalty.getUser().getUnit() != null
+                        ? penalty.getUser().getUnit().getId() : null,
+                "án phạt #" + penaltyId);
         return toResponse(penalty);
     }
 
     /**
-     * Lấy tất cả án phạt (Admin xem toàn bộ)
+     * Lấy án phạt theo phạm vi RBAC:
+     *  - Admin: toàn hệ thống.
+     *  - Manager/giáo vụ: chỉ SV thuộc unit của mình.
      */
     @Transactional(readOnly = true)
     public List<PenaltyResponse> getAllPenalties() {
-        return penaltyRepository.findByIsDeletedFalseOrderByCreatedAtDesc()
+        String unitId = authHelper.getScopedUnitIdOrNull();
+        return penaltyRepository.findByUnitScope(unitId)
                 .stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
@@ -215,6 +229,12 @@ public class PenaltyService {
     public PenaltyResponse revokePenalty(String penaltyId) {
         Penalty penalty = penaltyRepository.findById(penaltyId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
+
+        // Manager chỉ ân xá penalty của SV trong khoa mình.
+        authHelper.requireSameUnitOrAdmin(
+                penalty.getUser() != null && penalty.getUser().getUnit() != null
+                        ? penalty.getUser().getUnit().getId() : null,
+                "án phạt #" + penaltyId);
 
         if (!"ACTIVE".equals(penalty.getStatus())) {
             throw new RuntimeException("Án phạt này đã bị thu hồi trước đó");
@@ -266,6 +286,10 @@ public class PenaltyService {
     public void deletePenalty(String penaltyId) {
         Penalty penalty = penaltyRepository.findById(penaltyId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
+        authHelper.requireSameUnitOrAdmin(
+                penalty.getUser() != null && penalty.getUser().getUnit() != null
+                        ? penalty.getUser().getUnit().getId() : null,
+                "án phạt #" + penaltyId);
         penalty.setDeleted(true);
         penaltyRepository.save(penalty);
     }

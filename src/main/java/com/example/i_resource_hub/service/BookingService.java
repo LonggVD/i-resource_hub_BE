@@ -8,6 +8,7 @@ import com.example.i_resource_hub.dto.request.EvidenceRequest;
 import com.example.i_resource_hub.dto.response.BookingResponse;
 import com.example.i_resource_hub.entity.*;
 import com.example.i_resource_hub.repository.*;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import com.example.i_resource_hub.security.CustomUserDetails;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +41,7 @@ public class BookingService {
     private final UserRepository userRepository;
     private final PenaltyService penaltyService;
     private final NotificationService notificationService;
+    private final AuthorizationHelper authHelper;
 
     @Value("${penalty.points.late-return:10}")
     private int latePenaltyPoint;
@@ -323,25 +325,35 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy đơn đặt lịch"));
 
+        requireSameUnitOrAdminFor(booking);
         processSingleAction(booking, request);
     }
 
     @Transactional
     public void processBulkAction(List<String> bookingIds, ActionRequest request) {
-        User currentUser = getCurrentUser();
         List<Booking> bookings = bookingRepository.findAllById(bookingIds);
+        boolean isAdmin = authHelper.isAdmin();
+        String myUnitId = authHelper.getCurrentUnitId();
 
         for (Booking booking : bookings) {
-            // Tận dụng logic kiểm tra quyền của từng đơn
-            OrganizationUnit adminUnit = currentUser.getUnit();
-            OrganizationUnit effectiveUnit = getEffectiveUnit(booking);
-
-            if (adminUnit == null || effectiveUnit == null || !adminUnit.getId().equals(effectiveUnit.getId())) {
-                continue; // Bỏ qua nếu không có quyền (an toàn hơn throw error giữa chừng)
+            if (!isAdmin) {
+                // Manager: skip silently nếu booking không thuộc khoa (không phá batch).
+                OrganizationUnit effectiveUnit = getEffectiveUnit(booking);
+                if (effectiveUnit == null || myUnitId == null
+                        || !myUnitId.equals(effectiveUnit.getId())) {
+                    continue;
+                }
             }
-
             processSingleAction(booking, request);
         }
+    }
+
+    /** Throw AccessDeniedException nếu booking không thuộc unit của user hiện tại (admin pass). */
+    private void requireSameUnitOrAdminFor(Booking booking) {
+        OrganizationUnit effectiveUnit = getEffectiveUnit(booking);
+        authHelper.requireSameUnitOrAdmin(
+                effectiveUnit != null ? effectiveUnit.getId() : null,
+                "đơn mượn #" + booking.getId());
     }
 
     private void processSingleAction(Booking booking, ActionRequest request) {
@@ -478,6 +490,7 @@ public class BookingService {
         Booking booking = bookingRepository.findByQrCodeToken(token)
                 .orElseThrow(() -> new RuntimeException("Mã QR không hợp lệ hoặc đã hết hạn"));
 
+        requireSameUnitOrAdminFor(booking);
         performCheckIn(booking, newSerialNumber);
     }
 
@@ -712,6 +725,8 @@ public class BookingService {
     public void addEvidence(EvidenceRequest request) {
         Booking booking = bookingRepository.findById(request.getBookingId())
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy đơn mượn"));
+
+        requireSameUnitOrAdminFor(booking);
 
         BookingEvidence evidence = BookingEvidence.builder()
                 .booking(booking)
@@ -949,10 +964,21 @@ public class BookingService {
         // Reload từng booking trong vòng lặp: createSystemPenalty bên dưới có
         // @Modifying(clearAutomatically=true) clear persistence context → các proxy lazy
         // (resourceItem, slot, user) bị detach, gây LazyInitializationException ở iteration kế tiếp.
+        boolean isAdmin = authHelper.isAdmin();
+        String myUnitId = authHelper.getCurrentUnitId();
+
         for (String bookingId : ids) {
             Booking booking = bookingRepository.findById(bookingId).orElse(null);
             if (booking == null || !"BORROWED".equalsIgnoreCase(booking.getStatus()))
                 continue;
+            // RBAC: manager chỉ trả đồ trong khoa mình. Admin pass.
+            if (!isAdmin) {
+                OrganizationUnit effectiveUnit = getEffectiveUnit(booking);
+                if (effectiveUnit == null || myUnitId == null
+                        || !myUnitId.equals(effectiveUnit.getId())) {
+                    continue;
+                }
+            }
             ResourceItem item = booking.getResourceItem();
             com.example.i_resource_hub.dto.request.BulkReturnRequest.ItemDamageRequest damageInfo = damageMap
                     .get(bookingId);

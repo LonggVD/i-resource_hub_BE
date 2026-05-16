@@ -4,6 +4,7 @@ import com.example.i_resource_hub.entity.OrganizationUnit;
 import com.example.i_resource_hub.entity.ResourceItem;
 import com.example.i_resource_hub.entity.ResourceTemplate;
 import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.util.StringUtils;
@@ -30,8 +31,19 @@ public class ResourceItemSpecification {
             }
 
             if (StringUtils.hasText(unitId)) {
-                Join<ResourceItem, OrganizationUnit> unitJoin = root.join("managedByUnit");
-                predicates.add(cb.equal(unitJoin.get("id"), unitId));
+                // 1 item "thuộc unit" nếu managedByUnit trực tiếp khớp HOẶC
+                // template.unit khớp (fallback) — đồng nhất với BookingService.getEffectiveUnit.
+                // Phải dùng LEFT JOIN để không loại mất items có managedByUnit IS NULL.
+                Join<ResourceItem, OrganizationUnit> directUnit =
+                        root.join("managedByUnit", JoinType.LEFT);
+                Join<ResourceItem, ResourceTemplate> tplJoin =
+                        root.join("template", JoinType.LEFT);
+                Join<ResourceTemplate, OrganizationUnit> tplUnit =
+                        tplJoin.join("unit", JoinType.LEFT);
+                predicates.add(cb.or(
+                        cb.equal(directUnit.get("id"), unitId),
+                        cb.equal(tplUnit.get("id"), unitId)
+                ));
             }
 
             if (StringUtils.hasText(status)) {

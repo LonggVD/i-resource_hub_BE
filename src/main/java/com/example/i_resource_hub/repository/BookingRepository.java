@@ -64,4 +64,64 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
            "WHERE b.bookingDate BETWEEN :from AND :to " +
            "ORDER BY b.bookingDate DESC, b.createdAt DESC")
     List<Booking> findByBookingDateBetween(@Param("from") LocalDate from, @Param("to") LocalDate to);
+
+    // ===== Unit-scoped variants (admin = unitId null) =====
+
+    /** Pattern khớp với {@link #findAllByUnitId}: 1 booking thuộc unit nếu managedByUnit / item.managedByUnit / item.template.unit khớp. */
+    @Query("SELECT COUNT(b) FROM Booking b " +
+           "LEFT JOIN b.managedByUnit u1 " +
+           "LEFT JOIN b.resourceItem i " +
+           "LEFT JOIN i.managedByUnit u2 " +
+           "LEFT JOIN i.template t " +
+           "LEFT JOIN t.unit u3 " +
+           "WHERE b.status = :status " +
+           "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId OR u3.id = :unitId)")
+    long countByStatusAndUnitScope(@Param("status") String status,
+                                   @Param("unitId") String unitId);
+
+    @Query(value = "SELECT b.booking_date, COUNT(b.id) FROM bookings b " +
+           "LEFT JOIN resource_items i ON i.id = b.resource_item_id " +
+           "LEFT JOIN resource_templates t ON t.id = i.template_id " +
+           "WHERE b.booking_date >= :startDate " +
+           "AND (:unitId IS NULL OR b.managed_by_unit = :unitId OR i.unit_id = :unitId OR t.unit_id = :unitId) " +
+           "GROUP BY b.booking_date ORDER BY b.booking_date", nativeQuery = true)
+    List<Object[]> countBookingsByDateAndUnitScope(@Param("startDate") LocalDate startDate,
+                                                   @Param("unitId") String unitId);
+
+    @Query("SELECT i.template.name, COUNT(b.id) FROM Booking b " +
+           "JOIN b.resourceItem i " +
+           "LEFT JOIN b.managedByUnit u1 " +
+           "LEFT JOIN i.managedByUnit u2 " +
+           "LEFT JOIN i.template t " +
+           "LEFT JOIN t.unit u3 " +
+           "WHERE b.status IN ('APPROVED', 'BORROWED', 'RETURNED') " +
+           "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId OR u3.id = :unitId) " +
+           "GROUP BY i.template.name ORDER BY COUNT(b.id) DESC")
+    List<Object[]> findTopBorrowedTemplatesByUnitScope(@Param("unitId") String unitId);
+
+    @Query("SELECT b FROM Booking b " +
+           "LEFT JOIN b.managedByUnit u1 " +
+           "LEFT JOIN b.resourceItem i " +
+           "LEFT JOIN i.managedByUnit u2 " +
+           "LEFT JOIN i.template t " +
+           "LEFT JOIN t.unit u3 " +
+           "WHERE b.status = 'BORROWED' AND b.bookingDate <= :today " +
+           "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId OR u3.id = :unitId)")
+    List<Booking> findOverdueCandidatesByUnitScope(@Param("today") LocalDate today,
+                                                   @Param("unitId") String unitId);
+
+    @Query("SELECT DISTINCT b FROM Booking b " +
+           "LEFT JOIN FETCH b.user " +
+           "LEFT JOIN FETCH b.slot " +
+           "LEFT JOIN FETCH b.resourceItem ri " +
+           "LEFT JOIN FETCH ri.template tpl " +
+           "LEFT JOIN FETCH b.managedByUnit u1 " +
+           "LEFT JOIN ri.managedByUnit u2 " +
+           "LEFT JOIN tpl.unit u3 " +
+           "WHERE b.bookingDate BETWEEN :from AND :to " +
+           "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId OR u3.id = :unitId) " +
+           "ORDER BY b.bookingDate DESC, b.createdAt DESC")
+    List<Booking> findByBookingDateBetweenAndUnitScope(@Param("from") LocalDate from,
+                                                       @Param("to") LocalDate to,
+                                                       @Param("unitId") String unitId);
 }
