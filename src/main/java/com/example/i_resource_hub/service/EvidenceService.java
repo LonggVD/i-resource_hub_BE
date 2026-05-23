@@ -4,10 +4,12 @@ import com.example.i_resource_hub.dto.request.EvidenceRequest;
 import com.example.i_resource_hub.dto.response.EvidenceResponse;
 import com.example.i_resource_hub.entity.Booking;
 import com.example.i_resource_hub.entity.BookingEvidence;
+import com.example.i_resource_hub.entity.ResourceItem;
 import com.example.i_resource_hub.entity.User;
 import com.example.i_resource_hub.repository.BookingEvidenceRepository;
 import com.example.i_resource_hub.repository.BookingRepository;
 import com.example.i_resource_hub.repository.UserRepository;
+import com.example.i_resource_hub.security.AuthorizationHelper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,11 +24,19 @@ public class EvidenceService {
     private final BookingEvidenceRepository evidenceRepository;
     private final BookingRepository bookingRepository;
     private final UserRepository userRepository;
+    private final AuthorizationHelper authHelper;
 
     @Transactional
     public EvidenceResponse addEvidence(EvidenceRequest request, String userId) {
         Booking booking = bookingRepository.findById(request.getBookingId())
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy đơn mượn"));
+
+        // RBAC: manager chỉ thêm minh chứng cho đơn thuộc khoa mình.
+        // Admin: pass. Dùng cùng pattern effective-unit như BookingService.getEffectiveUnit
+        // (managedByUnit > resourceItem.managedByUnit > template.unit) để không bỏ sót.
+        authHelper.requireSameUnitOrAdmin(
+                effectiveUnitId(booking),
+                "đơn mượn #" + booking.getId());
 
         User user = userRepository.findByUsername(userId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
@@ -65,6 +75,23 @@ public class EvidenceService {
                 .stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Đơn vị "hiệu lực" của 1 booking — managedByUnit > item.managedByUnit > template.unit.
+     * Cùng pattern với BookingService.getEffectiveUnit / PenaltyService.effectiveBookingUnitId.
+     */
+    private String effectiveUnitId(Booking booking) {
+        if (booking == null) return null;
+        if (booking.getManagedByUnit() != null) return booking.getManagedByUnit().getId();
+        ResourceItem item = booking.getResourceItem();
+        if (item != null) {
+            if (item.getManagedByUnit() != null) return item.getManagedByUnit().getId();
+            if (item.getTemplate() != null && item.getTemplate().getUnit() != null) {
+                return item.getTemplate().getUnit().getId();
+            }
+        }
+        return null;
     }
 
     private EvidenceResponse toResponse(BookingEvidence e) {

@@ -10,10 +10,16 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -44,12 +50,40 @@ public class BookingController {
     }
 
     /**
+     * Danh sách đơn ĐÃ HUỶ (CANCELLED) — có phân trang + filter, scope theo đơn vị
+     * của user (admin xem hết). Phục vụ tab "Đơn đã huỷ" bên admin.
+     */
+    @Operation(summary = "Danh sách đơn đã huỷ (paginated)",
+            description = "Tab audit đơn CANCELLED. Filter theo cancelledAt (from/to) và keyword (tên SV / mã SV / tên thiết bị). Mặc định sort cancelledAt DESC.")
+    @GetMapping("/cancelled")
+    @PreAuthorize("hasAuthority('BOOKING_APPROVE')")
+    public ResponseEntity<Page<BookingResponse>> getCancelledBookings(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(required = false) String keyword,
+            @PageableDefault(size = 20, sort = "cancelledAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(bookingService.getCancelledBookings(from, to, keyword, pageable));
+    }
+
+    /**
      * Lấy danh sách đơn mượn của chính người đăng nhập (Dành cho Sinh viên)
      */
     @Operation(summary = "Lấy danh sách đơn mượn của tôi", description = "Chỉ lấy các đơn mượn do chính người đăng nhập tạo")
     @GetMapping("/my")
     public ResponseEntity<List<BookingResponse>> getMyBookings() {
         return ResponseEntity.ok(bookingService.getMyBookings());
+    }
+
+    /**
+     * Lịch sử mượn của 1 thiết bị (mới nhất trước) — phục vụ truy vết khi xử phạt.
+     * RBAC: chỉ manager khoa quản lý item (hoặc admin) xem được.
+     */
+    @Operation(summary = "Lịch sử mượn của 1 thiết bị",
+            description = "Trả về tất cả booking của thiết bị, mới nhất trước. Dành cho quản lý.")
+    @GetMapping("/by-item/{itemId}/recent")
+    @PreAuthorize("hasAuthority('RESOURCE_MANAGE') or hasAuthority('BOOKING_APPROVE') or hasRole('ADMIN')")
+    public ResponseEntity<List<BookingResponse>> getRecentByItem(@PathVariable String itemId) {
+        return ResponseEntity.ok(bookingService.getRecentByResourceItem(itemId));
     }
 
     /**

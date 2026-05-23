@@ -40,4 +40,13 @@ public class BookingResponse {
     private Boolean isResolved;
     private String evidenceImageUrl;
     private Boolean isPenalized;
+    // Thông tin penalty mới nhất gắn với booking (nếu có) — phục vụ popup "Chi tiết sự cố"
+    // hiển thị mức điểm trừ + tiền bồi thường mà phòng lab đã ghi nhận.
+    private String penaltyType;
+    private Integer penaltyPoint;
+    private Long penaltyFineAmount;
+    private String penaltyStatus;
+    private LocalDateTime cancelledAt;
+    private String cancelledReason;
+    private String rejectedReason;
 }

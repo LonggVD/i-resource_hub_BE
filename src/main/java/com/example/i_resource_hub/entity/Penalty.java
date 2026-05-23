@@ -43,7 +43,10 @@ public class Penalty extends BaseEntity {
 
     @Column(name = "status", length = 20)
     @Builder.Default
-    private String status = "ACTIVE"; // ACTIVE, REVOKED
+    private String status = "ACTIVE"; // ACTIVE, REVOKED, PAID
+
+    @Column(name = "paid_at")
+    private java.time.LocalDateTime paidAt;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by_user", columnDefinition = "CHAR(36)")

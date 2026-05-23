@@ -52,6 +52,21 @@ public interface ResourceItemRepository
         long countByUnitScopeAndStatus(@Param("unitId") String unitId,
                         @Param("status") String status);
 
+        /**
+         * Đếm thiết bị "hỏng" theo nghĩa rộng: status = 'DAMAGED' HOẶC conditionStatus = 'DAMAGED'.
+         * status (operational) và conditionStatus (physical) là 2 trường độc lập — một item có thể
+         * conditionStatus=DAMAGED nhưng status=AVAILABLE (chưa khoá lại sau khi ghi nhận hư hỏng).
+         * Dashboard "Sức khoẻ kho" phải tính cả 2 đường này để không bỏ sót.
+         */
+        @Query("SELECT COUNT(i) FROM ResourceItem i " +
+                        "LEFT JOIN i.managedByUnit u1 " +
+                        "LEFT JOIN i.template t " +
+                        "LEFT JOIN t.unit u2 " +
+                        "WHERE i.isDeleted = false " +
+                        "AND (i.status = 'DAMAGED' OR i.conditionStatus = 'DAMAGED') " +
+                        "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId)")
+        long countDamagedByUnitScope(@Param("unitId") String unitId);
+
         @Query("SELECT DISTINCT i FROM ResourceItem i " +
                         "LEFT JOIN i.managedByUnit u1 " +
                         "LEFT JOIN i.template t " +
@@ -62,7 +77,8 @@ public interface ResourceItemRepository
 
         @Query("SELECT i FROM ResourceItem i WHERE i.template.id = :templateId " +
                         "AND i.isDeleted = false " +
-                        "AND i.status NOT IN ('BROKEN', 'MAINTENANCE', 'LOST') " +
+                        "AND i.status NOT IN ('DAMAGED', 'MAINTENANCE', 'LOST') " +
+                        "AND (i.conditionStatus IS NULL OR i.conditionStatus NOT IN ('DAMAGED', 'LOST')) " +
                         "AND i.id NOT IN (SELECT b.resourceItem.id FROM Booking b JOIN b.slot s " +
                         "WHERE b.bookingDate = :date " +
                         "AND b.status IN ('PENDING', 'APPROVED', 'BORROWED') " +
@@ -77,7 +93,8 @@ public interface ResourceItemRepository
         @Lock(LockModeType.PESSIMISTIC_WRITE)
         @Query("SELECT i FROM ResourceItem i WHERE i.template.id = :templateId " +
                         "AND i.isDeleted = false " +
-                        "AND i.status NOT IN ('BROKEN', 'MAINTENANCE', 'LOST') " +
+                        "AND i.status NOT IN ('DAMAGED', 'MAINTENANCE', 'LOST') " +
+                        "AND (i.conditionStatus IS NULL OR i.conditionStatus NOT IN ('DAMAGED', 'LOST')) " +
                         "AND i.id NOT IN (SELECT b.resourceItem.id FROM Booking b JOIN b.slot s " +
                         "WHERE b.bookingDate = :date " +
                         "AND b.status IN ('PENDING', 'APPROVED', 'BORROWED') " +

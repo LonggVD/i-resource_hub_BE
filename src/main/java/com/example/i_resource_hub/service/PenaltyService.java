@@ -11,6 +11,7 @@ import com.example.i_resource_hub.repository.UserRepository;
 import com.example.i_resource_hub.security.AuthorizationHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +41,16 @@ public class PenaltyService {
     @Transactional
     public Penalty createSystemPenalty(User user, Booking booking, String penaltyType,
                                        int penaltyPoint, String description) {
+        return createSystemPenalty(user, booking, penaltyType, penaltyPoint, description, null);
+    }
+
+    /**
+     * Phiên bản đầy đủ — caller truyền thêm số tiền bồi thường (fineAmount) nếu có.
+     * Áp dụng cho DAMAGE/LOST khi giáo vụ nhập số tiền lúc báo hỏng / nhận lại đồ.
+     */
+    @Transactional
+    public Penalty createSystemPenalty(User user, Booking booking, String penaltyType,
+                                       int penaltyPoint, String description, Long fineAmount) {
         if (user == null || penaltyType == null || penaltyType.isBlank()) {
             return null;
         }
@@ -63,6 +74,7 @@ public class PenaltyService {
                 .penaltyType(penaltyType)
                 .penaltyPoint(penaltyPoint)
                 .description(description)
+                .fineAmount(fineAmount != null ? fineAmount.doubleValue() : null)
                 .status("ACTIVE")
                 .createdByUser(null) // Hệ thống
                 .requiresReview(false)
@@ -119,11 +131,6 @@ public class PenaltyService {
         User targetUser = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
 
-        // RBAC theo unit: manager chỉ phạt SV trong khoa mình. Admin được phép cross-unit.
-        authHelper.requireSameUnitOrAdmin(
-                targetUser.getUnit() != null ? targetUser.getUnit().getId() : null,
-                "sinh viên " + targetUser.getFullName());
-
         User adminUser = userRepository.findByUsername(adminUserId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy quản trị viên"));
 
@@ -131,6 +138,9 @@ public class PenaltyService {
         if (request.getBookingId() != null && !request.getBookingId().isBlank()) {
             booking = bookingRepository.findById(request.getBookingId()).orElse(null);
         }
+
+        // RBAC: manager pass nếu SV cùng khoa HOẶC booking thuộc khoa mình. Admin: pass.
+        requireCanManagePenalty(targetUser, booking, "xử phạt sinh viên " + targetUser.getFullName());
 
         // 1. Tạo bản ghi Penalty
         Penalty penalty = Penalty.builder()
@@ -190,10 +200,7 @@ public class PenaltyService {
     public PenaltyResponse getPenaltyById(String penaltyId) {
         Penalty penalty = penaltyRepository.findById(penaltyId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
-        authHelper.requireSameUnitOrAdmin(
-                penalty.getUser() != null && penalty.getUser().getUnit() != null
-                        ? penalty.getUser().getUnit().getId() : null,
-                "án phạt #" + penaltyId);
+        requireCanManagePenalty(penalty.getUser(), penalty.getBooking(), "án phạt #" + penaltyId);
         return toResponse(penalty);
     }
 
@@ -230,11 +237,9 @@ public class PenaltyService {
         Penalty penalty = penaltyRepository.findById(penaltyId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
 
-        // Manager chỉ ân xá penalty của SV trong khoa mình.
-        authHelper.requireSameUnitOrAdmin(
-                penalty.getUser() != null && penalty.getUser().getUnit() != null
-                        ? penalty.getUser().getUnit().getId() : null,
-                "án phạt #" + penaltyId);
+        // Manager ân xá được nếu SV cùng khoa HOẶC penalty gắn booking thuộc khoa mình.
+        requireCanManagePenalty(penalty.getUser(), penalty.getBooking(),
+                "thu hồi án phạt #" + penaltyId);
 
         if (!"ACTIVE".equals(penalty.getStatus())) {
             throw new RuntimeException("Án phạt này đã bị thu hồi trước đó");
@@ -286,12 +291,50 @@ public class PenaltyService {
     public void deletePenalty(String penaltyId) {
         Penalty penalty = penaltyRepository.findById(penaltyId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy án phạt"));
-        authHelper.requireSameUnitOrAdmin(
-                penalty.getUser() != null && penalty.getUser().getUnit() != null
-                        ? penalty.getUser().getUnit().getId() : null,
-                "án phạt #" + penaltyId);
+        requireCanManagePenalty(penalty.getUser(), penalty.getBooking(),
+                "xoá án phạt #" + penaltyId);
         penalty.setDeleted(true);
         penaltyRepository.save(penalty);
+    }
+
+    /**
+     * Đơn vị "hiệu lực" của 1 booking — lần lượt: managedByUnit > resourceItem.managedByUnit >
+     * resourceItem.template.unit. Cùng pattern với BookingService.getEffectiveUnit.
+     */
+    private String effectiveBookingUnitId(Booking booking) {
+        if (booking == null) return null;
+        if (booking.getManagedByUnit() != null) return booking.getManagedByUnit().getId();
+        ResourceItem item = booking.getResourceItem();
+        if (item != null) {
+            if (item.getManagedByUnit() != null) return item.getManagedByUnit().getId();
+            if (item.getTemplate() != null && item.getTemplate().getUnit() != null) {
+                return item.getTemplate().getUnit().getId();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * RBAC cho thao tác penalty: Manager pass nếu MỘT trong 2 điều kiện đúng:
+     *  (a) SV thuộc khoa của manager (logic gốc), HOẶC
+     *  (b) Penalty gắn 1 booking thuộc khoa của manager (cross-unit borrowing).
+     * Admin: pass mọi trường hợp.
+     * Throw AccessDeniedException nếu không thoả.
+     */
+    private void requireCanManagePenalty(User targetUser, Booking booking, String resourceLabel) {
+        if (authHelper.isAdmin()) return;
+        String myUnit = authHelper.getCurrentUnitId();
+        if (myUnit == null) {
+            throw new AccessDeniedException(
+                    "Tài khoản chưa được gán đơn vị, không thể thao tác " + resourceLabel);
+        }
+        String studentUnit = targetUser != null && targetUser.getUnit() != null
+                ? targetUser.getUnit().getId() : null;
+        String bookingUnit = effectiveBookingUnitId(booking);
+        if (myUnit.equals(studentUnit) || myUnit.equals(bookingUnit)) return;
+        throw new AccessDeniedException(
+                "Không có quyền thao tác " + resourceLabel
+                        + " — sinh viên không thuộc khoa bạn và đơn mượn (nếu có) cũng không thuộc khoa bạn");
     }
 
     /**

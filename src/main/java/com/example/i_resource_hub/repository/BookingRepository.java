@@ -1,12 +1,15 @@
 package com.example.i_resource_hub.repository;
 
 import com.example.i_resource_hub.entity.Booking;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -26,6 +29,16 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
 
     // Lấy danh sách Booking của riêng người dùng
     List<Booking> findByUser_IdOrderByCreatedAtDesc(String userId);
+
+    /** Lịch sử mượn của 1 thiết bị, mới nhất trước (dùng cho màn truy vết khi xử phạt). */
+    @Query("SELECT b FROM Booking b " +
+           "LEFT JOIN FETCH b.user " +
+           "LEFT JOIN FETCH b.slot " +
+           "LEFT JOIN FETCH b.resourceItem ri " +
+           "LEFT JOIN FETCH ri.template " +
+           "WHERE b.resourceItem.id = :itemId " +
+           "ORDER BY b.bookingDate DESC, b.createdAt DESC")
+    List<Booking> findRecentByResourceItemId(@Param("itemId") String itemId);
 
     List<Booking> findAllByStatus(String status);
 
@@ -124,4 +137,30 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
     List<Booking> findByBookingDateBetweenAndUnitScope(@Param("from") LocalDate from,
                                                        @Param("to") LocalDate to,
                                                        @Param("unitId") String unitId);
+
+    /**
+     * Danh sách đơn đã huỷ, scope theo unit (admin: unitId = null → xem hết),
+     * filter theo khoảng cancelledAt và keyword (tên người mượn / mã SV / tên thiết bị).
+     * Dùng cho màn audit "Đơn đã huỷ" bên admin.
+     */
+    @Query("SELECT DISTINCT b FROM Booking b " +
+           "LEFT JOIN b.user usr " +
+           "LEFT JOIN b.resourceItem ri " +
+           "LEFT JOIN ri.template tpl " +
+           "LEFT JOIN b.managedByUnit u1 " +
+           "LEFT JOIN ri.managedByUnit u2 " +
+           "LEFT JOIN tpl.unit u3 " +
+           "WHERE b.status = 'CANCELLED' " +
+           "AND (:unitId IS NULL OR u1.id = :unitId OR u2.id = :unitId OR u3.id = :unitId) " +
+           "AND (:from IS NULL OR b.cancelledAt >= :from) " +
+           "AND (:to IS NULL OR b.cancelledAt <= :to) " +
+           "AND (:keyword IS NULL OR :keyword = '' " +
+           "     OR LOWER(usr.fullName) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "     OR LOWER(usr.studentCode) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "     OR LOWER(tpl.name) LIKE LOWER(CONCAT('%', :keyword, '%')))")
+    Page<Booking> findCancelledByUnitScope(@Param("unitId") String unitId,
+                                           @Param("from") LocalDateTime from,
+                                           @Param("to") LocalDateTime to,
+                                           @Param("keyword") String keyword,
+                                           Pageable pageable);
 }

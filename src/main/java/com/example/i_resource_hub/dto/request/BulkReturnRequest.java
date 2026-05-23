@@ -23,5 +23,7 @@ public class BulkReturnRequest {
         private String bookingId;
         private String imageUrl;
         private String description;
+        /** Số tiền bồi thường giáo vụ ghi nhận lúc trả đồ — tuỳ chọn. */
+        private Long fineAmount;
     }
 }

@@ -12,7 +12,11 @@ import com.example.i_resource_hub.security.AuthorizationHelper;
 import com.example.i_resource_hub.security.CustomUserDetails;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -55,6 +59,15 @@ public class BookingService {
     @Value("${penalty.late-return.grace-minutes:30}")
     private int lateReturnGraceMinutes;
 
+    // Self-proxy để gọi method @Transactional qua Spring proxy, tránh self-invocation
+    // bỏ qua AOP. @Lazy phá vòng phụ thuộc khởi tạo bean.
+    private BookingService self;
+
+    @Autowired
+    public void setSelf(@Lazy BookingService self) {
+        this.self = self;
+    }
+
     /**
      * Lấy toàn bộ danh sách đơn mượn (cho bảng Kanban)
      */
@@ -72,6 +85,29 @@ public class BookingService {
     public List<BookingResponse> getMyBookings() {
         User currentUser = getCurrentUser();
         return bookingRepository.findByUser_IdOrderByCreatedAtDesc(currentUser.getId()).stream()
+                .map(this::mapToResponse)
+                .toList();
+    }
+
+    /**
+     * Lịch sử mượn của 1 thiết bị (mới nhất trước). Dùng cho màn quản lý thiết bị
+     * khi cần truy vết người mượn gần nhất để xử phạt.
+     * RBAC: chỉ manager khoa quản lý item (hoặc admin) xem được.
+     */
+    @Transactional(readOnly = true)
+    public List<BookingResponse> getRecentByResourceItem(String itemId) {
+        ResourceItem item = resourceItemRepository.findById(itemId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy thiết bị"));
+
+        OrganizationUnit itemUnit = item.getManagedByUnit();
+        if (itemUnit == null && item.getTemplate() != null) {
+            itemUnit = item.getTemplate().getUnit();
+        }
+        authHelper.requireSameUnitOrAdmin(
+                itemUnit != null ? itemUnit.getId() : null,
+                "thiết bị " + item.getSerialNumber());
+
+        return bookingRepository.findRecentByResourceItemId(itemId).stream()
                 .map(this::mapToResponse)
                 .toList();
     }
@@ -256,6 +292,19 @@ public class BookingService {
                 .filter(e -> "DAMAGE".equalsIgnoreCase(e.getEvidenceType()))
                 .findFirst();
 
+        // Tìm penalty đang ACTIVE liên quan booking — ưu tiên DAMAGE, fallback bất kỳ ACTIVE.
+        // Dùng để hiển thị "xử lý từ phòng lab" trong popup chi tiết sự cố.
+        Optional<Penalty> activePenalty = booking.getPenalties().stream()
+                .filter(p -> !p.isDeleted() && "ACTIVE".equalsIgnoreCase(p.getStatus()))
+                .sorted((a, b) -> {
+                    boolean aDamage = "DAMAGE".equalsIgnoreCase(a.getPenaltyType());
+                    boolean bDamage = "DAMAGE".equalsIgnoreCase(b.getPenaltyType());
+                    if (aDamage && !bDamage) return -1;
+                    if (!aDamage && bDamage) return 1;
+                    return 0;
+                })
+                .findFirst();
+
         return BookingResponse.builder()
                 .id(booking.getId())
                 .userId(booking.getUser() != null ? booking.getUser().getId() : null)
@@ -292,7 +341,31 @@ public class BookingService {
                 .isResolved(damageEvidence.map(BookingEvidence::getIsResolved).orElse(false))
                 .evidenceImageUrl(damageEvidence.map(BookingEvidence::getImageUrl).orElse(null))
                 .isPenalized(booking.getPenalties().stream().anyMatch(p -> "ACTIVE".equals(p.getStatus()) && !p.isDeleted()))
+                .penaltyType(activePenalty.map(Penalty::getPenaltyType).orElse(null))
+                .penaltyPoint(activePenalty.map(Penalty::getPenaltyPoint).orElse(null))
+                .penaltyFineAmount(activePenalty
+                        .map(Penalty::getFineAmount)
+                        .filter(v -> v != null)
+                        .map(Double::longValue)
+                        .orElse(null))
+                .penaltyStatus(activePenalty.map(Penalty::getStatus).orElse(null))
+                .cancelledAt(booking.getCancelledAt())
+                .cancelledReason(booking.getCancelledReason())
+                .rejectedReason(booking.getRejectedReason())
                 .build();
+    }
+
+    /**
+     * Danh sách đơn ĐÃ HUỶ (CANCELLED) — phục vụ màn audit "Đơn đã huỷ" bên admin.
+     * Scope theo Khoa của user hiện tại (admin xem hết). Hỗ trợ filter cancelledAt
+     * theo khoảng [from, to] và keyword (tên SV / mã SV / tên thiết bị).
+     */
+    @Transactional(readOnly = true)
+    public Page<BookingResponse> getCancelledBookings(LocalDateTime from, LocalDateTime to,
+                                                      String keyword, Pageable pageable) {
+        String unitId = authHelper.isAdmin() ? null : authHelper.getCurrentUnitId();
+        return bookingRepository.findCancelledByUnitScope(unitId, from, to, keyword, pageable)
+                .map(this::mapToResponse);
     }
 
     /**
@@ -566,6 +639,16 @@ public class BookingService {
                         + newItem.getStatus() + ")");
             }
 
+            // Chặn ngay tại bước quét QR nếu thiết bị bị hỏng/mất theo condition vật lý.
+            // status có thể vẫn AVAILABLE nhưng conditionStatus đánh dấu DAMAGED/LOST do
+            // ai đó vừa cập nhật — KHÔNG được bàn giao cho sinh viên.
+            String newCond = newItem.getConditionStatus();
+            if ("DAMAGED".equalsIgnoreCase(newCond) || "LOST".equalsIgnoreCase(newCond)) {
+                throw new RuntimeException("Thiết bị " + newSerialNumber
+                        + " đang ở tình trạng " + ("DAMAGED".equalsIgnoreCase(newCond) ? "Hư hỏng" : "Đã mất")
+                        + " — không thể bàn giao. Vui lòng chọn thiết bị khác.");
+            }
+
             if (!sameAsPreAssigned) {
                 // oldItem là gợi ý nội bộ — status đang AVAILABLE (chưa bàn giao đơn này),
                 // không cần đụng. Nếu oldItem đã IN_USE/BORROWED nghĩa là một booking khác
@@ -580,6 +663,22 @@ public class BookingService {
         if (booking.getResourceItem() == null) {
             throw new RuntimeException("Đơn mượn chưa được gán thiết bị thực tế. "
                     + "Vui lòng quét QR thiết bị trước khi bàn giao.");
+        }
+
+        // Defense-in-depth: phòng trường hợp dùng item pre-assigned (không qua nhánh quét QR
+        // ở trên) hoặc item bị đổi state giữa chừng — kiểm tra lại sức khoẻ ngay trước handover.
+        ResourceItem boundItem = booking.getResourceItem();
+        String boundCond = boundItem.getConditionStatus();
+        String boundStatus = boundItem.getStatus();
+        if ("DAMAGED".equalsIgnoreCase(boundCond) || "LOST".equalsIgnoreCase(boundCond)) {
+            throw new RuntimeException("Thiết bị " + boundItem.getSerialNumber()
+                    + " đang " + ("DAMAGED".equalsIgnoreCase(boundCond) ? "hư hỏng" : "bị mất")
+                    + " — không thể bàn giao cho sinh viên. Vui lòng đổi thiết bị khác.");
+        }
+        if ("DAMAGED".equalsIgnoreCase(boundStatus) || "LOST".equalsIgnoreCase(boundStatus)
+                || "MAINTENANCE".equalsIgnoreCase(boundStatus)) {
+            throw new RuntimeException("Thiết bị " + boundItem.getSerialNumber()
+                    + " đang ở trạng thái không khả dụng (" + boundStatus + ") — không thể bàn giao.");
         }
 
         // Kiểm tra thời gian
@@ -704,13 +803,17 @@ public class BookingService {
                     booking.getSlot() != null ? booking.getSlot().getSlotName() : "",
                     evidenceRequest != null && evidenceRequest.getDescription() != null
                             ? evidenceRequest.getDescription() : "");
+            Long fineAmount = evidenceRequest != null ? evidenceRequest.getFineAmount() : null;
             penaltyService.createSystemPenalty(
-                    booking.getUser(), booking, "DAMAGE", damagePenaltyPoint, desc.trim());
+                    booking.getUser(), booking, "DAMAGE", damagePenaltyPoint, desc.trim(), fineAmount);
 
+            String fineMsg = (fineAmount != null && fineAmount > 0)
+                    ? " Tiền bồi thường: " + String.format("%,d", fineAmount) + "đ."
+                    : "";
             notifyBookingActor(booking, "BOOKING_DAMAGED",
                     "Ghi nhận hư hỏng thiết bị",
                     "Bạn bị ghi nhận hư hỏng thiết bị " + describeBooking(booking)
-                            + " khi trả. Bạn đã bị trừ " + damagePenaltyPoint + " điểm tín nhiệm.");
+                            + " khi trả. Bạn đã bị trừ " + damagePenaltyPoint + " điểm tín nhiệm." + fineMsg);
         } else {
             notifyBookingActor(booking, "BOOKING_RETURNED",
                     "Đã trả thiết bị thành công",
@@ -770,76 +873,103 @@ public class BookingService {
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng hiện tại"));
     }
 
-    @Transactional
     public void autoCancelExpiredBookings() {
-        // Quét cả đơn CHỜ DUYỆT và ĐÃ DUYỆT (nhưng chưa đến lấy đồ)
-        List<String> statuses = List.of("PENDING", "APPROVED");
-        List<Booking> expiredCandidates = bookingRepository.findAllByStatusIn(statuses);
+        // KHÔNG @Transactional ở vòng ngoài: nếu inner call (createSystemPenalty,
+        // createAndPush…) ném exception thì transaction shared bị mark rollback-only,
+        // try/catch ở dưới sẽ "nuốt" lỗi nhưng commit vẫn ném UnexpectedRollbackException.
+        // Thay vào đó, mỗi booking xử lý trong 1 transaction riêng (qua self proxy) —
+        // booking lỗi sẽ rollback gọn và được retry ở lần cron sau (createSystemPenalty
+        // đã idempotent, status PENDING/APPROVED vẫn nằm trong tập quét).
+        // Chỉ lấy id ở vòng ngoài (không tx) → không đụng vào lazy proxy (slot, user…)
+        // để tránh LazyInitializationException. Filter isExpired để cho inner helper
+        // làm sau khi đã reload booking trong session riêng.
+        List<String> ids = bookingRepository.findAllByStatusIn(List.of("PENDING", "APPROVED"))
+                .stream()
+                .map(Booking::getId)
+                .toList();
 
         int count = 0;
-        for (Booking booking : expiredCandidates) {
-            if (isExpired(booking)) {
-                String oldStatus = booking.getStatus();
-                booking.setStatus("CANCELLED");
-                booking.setCancelledReason(
-                        "Tự động hủy do hết giờ ca mượn (Sinh viên không đến nhận đồ hoặc Manager không duyệt kịp)");
-                booking.setCancelledAt(LocalDateTime.now());
-
-                // Giải phóng thiết bị nếu đơn đã ở trạng thái APPROVED.
-                // CHỈ đụng vào item đang RESERVED / AVAILABLE; tuyệt đối không reset
-                // item đang IN_USE (đã handover cho user khác), MAINTENANCE, DAMAGED, LOST.
-                if ("APPROVED".equalsIgnoreCase(oldStatus) && booking.getResourceItem() != null) {
-                    ResourceItem item = booking.getResourceItem();
-                    String currentItemStatus = item.getStatus();
-                    if ("RESERVED".equalsIgnoreCase(currentItemStatus)
-                            || "AVAILABLE".equalsIgnoreCase(currentItemStatus)
-                            || currentItemStatus == null) {
-                        item.setStatus("AVAILABLE");
-                        resourceItemRepository.save(item);
-                    } else {
-                        log.warn("autoCancelExpiredBookings: bỏ qua item {} (status={}) cho booking {} — không reset để tránh ghi đè state hợp lệ.",
-                                item.getId(), currentItemStatus, booking.getId());
-                    }
+        for (String id : ids) {
+            try {
+                if (self.autoCancelOneExpired(id)) {
+                    count++;
                 }
-
-                bookingRepository.save(booking);
-                saveHistory(booking, oldStatus, "CANCELLED", null, "Hệ thống tự động dọn dẹp đơn quá hạn");
-
-                // Đơn APPROVED bị quá giờ ca = sinh viên đã được duyệt nhưng KHÔNG đến nhận đồ.
-                // → ghi NO_SHOW (trừ điểm nhẹ). Còn PENDING không phạt vì có thể do quản lý chưa kịp duyệt.
-                if ("APPROVED".equalsIgnoreCase(oldStatus) && booking.getUser() != null) {
-                    String desc = String.format(
-                            "Sinh viên không đến nhận thiết bị %s (ca %s ngày %s) — đơn tự huỷ.",
-                            booking.getResourceItem() != null
-                                    && booking.getResourceItem().getTemplate() != null
-                                            ? booking.getResourceItem().getTemplate().getName()
-                                            : "không xác định",
-                            booking.getSlot() != null ? booking.getSlot().getSlotName() : "?",
-                            booking.getBookingDate());
-                    try {
-                        penaltyService.createSystemPenalty(
-                                booking.getUser(), booking, "NO_SHOW", noShowPenaltyPoint, desc);
-                    } catch (Exception ex) {
-                        log.warn("Không tạo được NO_SHOW penalty cho booking {}: {}",
-                                booking.getId(), ex.getMessage());
-                    }
-                    notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
-                            "Đơn mượn đã bị huỷ — bạn bị phạt NO_SHOW",
-                            "Đơn " + describeBooking(booking)
-                                    + " đã được duyệt nhưng bạn không đến nhận đồ trước khi ca kết thúc. "
-                                    + "Bị trừ " + noShowPenaltyPoint + " điểm tín nhiệm.");
-                } else {
-                    notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
-                            "Đơn mượn đã bị huỷ tự động",
-                            "Đơn " + describeBooking(booking)
-                                    + " bị huỷ do quá giờ ca mượn. Vui lòng đặt lại nếu vẫn cần mượn.");
-                }
-                count++;
+            } catch (Exception ex) {
+                log.warn("Tự huỷ booking {} thất bại, sẽ thử lại lần cron sau: {}",
+                        id, ex.getMessage());
             }
         }
         if (count > 0) {
             log.info("Đã tự động hủy {} đơn mượn quá hạn.", count);
         }
+    }
+
+    @Transactional
+    public boolean autoCancelOneExpired(String bookingId) {
+        Booking booking = bookingRepository.findById(bookingId).orElse(null);
+        if (booking == null) return false;
+
+        String oldStatus = booking.getStatus();
+        // Status có thể đã đổi giữa lúc fetch list và lúc xử lý (vd. manager vừa duyệt/từ chối).
+        if (!"PENDING".equalsIgnoreCase(oldStatus) && !"APPROVED".equalsIgnoreCase(oldStatus)) {
+            return false;
+        }
+        if (!isExpired(booking)) return false;
+
+        booking.setStatus("CANCELLED");
+        booking.setCancelledReason(
+                "Tự động hủy do hết giờ ca mượn (Sinh viên không đến nhận đồ hoặc Manager không duyệt kịp)");
+        booking.setCancelledAt(LocalDateTime.now());
+
+        // Giải phóng thiết bị nếu đơn đã ở trạng thái APPROVED.
+        // CHỈ đụng vào item đang RESERVED / AVAILABLE; tuyệt đối không reset
+        // item đang IN_USE (đã handover cho user khác), MAINTENANCE, DAMAGED, LOST.
+        if ("APPROVED".equalsIgnoreCase(oldStatus) && booking.getResourceItem() != null) {
+            ResourceItem item = booking.getResourceItem();
+            String currentItemStatus = item.getStatus();
+            if ("RESERVED".equalsIgnoreCase(currentItemStatus)
+                    || "AVAILABLE".equalsIgnoreCase(currentItemStatus)
+                    || currentItemStatus == null) {
+                item.setStatus("AVAILABLE");
+                resourceItemRepository.save(item);
+            } else {
+                log.warn("autoCancelExpiredBookings: bỏ qua item {} (status={}) cho booking {} — không reset để tránh ghi đè state hợp lệ.",
+                        item.getId(), currentItemStatus, booking.getId());
+            }
+        }
+
+        bookingRepository.save(booking);
+        saveHistory(booking, oldStatus, "CANCELLED", null, "Hệ thống tự động dọn dẹp đơn quá hạn");
+
+        // Đơn APPROVED bị quá giờ ca = sinh viên đã được duyệt nhưng KHÔNG đến nhận đồ.
+        // → ghi NO_SHOW (trừ điểm nhẹ). Còn PENDING không phạt vì có thể do quản lý chưa kịp duyệt.
+        if ("APPROVED".equalsIgnoreCase(oldStatus) && booking.getUser() != null) {
+            String desc = String.format(
+                    "Sinh viên không đến nhận thiết bị %s (ca %s ngày %s) — đơn tự huỷ.",
+                    booking.getResourceItem() != null
+                            && booking.getResourceItem().getTemplate() != null
+                                    ? booking.getResourceItem().getTemplate().getName()
+                                    : "không xác định",
+                    booking.getSlot() != null ? booking.getSlot().getSlotName() : "?",
+                    booking.getBookingDate());
+            // KHÔNG bọc try/catch quanh createSystemPenalty: nếu nuốt exception thì
+            // transaction đã bị Spring mark rollback-only → commit sẽ ném
+            // UnexpectedRollbackException. Cứ để propagate; outer loop catch, booking
+            // này rollback và retry ở cron sau (createSystemPenalty idempotent).
+            penaltyService.createSystemPenalty(
+                    booking.getUser(), booking, "NO_SHOW", noShowPenaltyPoint, desc);
+            notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
+                    "Đơn mượn đã bị huỷ — bạn bị phạt NO_SHOW",
+                    "Đơn " + describeBooking(booking)
+                            + " đã được duyệt nhưng bạn không đến nhận đồ trước khi ca kết thúc. "
+                            + "Bị trừ " + noShowPenaltyPoint + " điểm tín nhiệm.");
+        } else {
+            notifyBookingActor(booking, "BOOKING_AUTO_CANCELLED",
+                    "Đơn mượn đã bị huỷ tự động",
+                    "Đơn " + describeBooking(booking)
+                            + " bị huỷ do quá giờ ca mượn. Vui lòng đặt lại nếu vẫn cần mượn.");
+        }
+        return true;
     }
 
     private boolean isExpired(Booking booking) {
@@ -925,24 +1055,39 @@ public class BookingService {
 
     @Transactional(readOnly = true)
     public List<BookingResponse> getBatchByQrToken(String token) {
-        // 1. Thử tìm theo mã QR của từng thiết bị (Item QR)
+        // Gom toàn bộ booking khớp với QR/batch token
+        List<Booking> batch;
         Optional<Booking> bookingOpt = bookingRepository.findByQrCodeToken(token);
         if (bookingOpt.isPresent()) {
             Booking booking = bookingOpt.get();
             String batchToken = booking.getBatchToken();
-            if (batchToken == null) {
-                return List.of(mapToResponse(booking));
-            }
-            return bookingRepository.findAllByBatchToken(batchToken).stream().map(this::mapToResponse).toList();
+            batch = batchToken == null
+                    ? List.of(booking)
+                    : bookingRepository.findAllByBatchToken(batchToken);
+        } else {
+            batch = bookingRepository.findAllByBatchToken(token);
         }
 
-        // 2. Thử tìm trực tiếp theo mã lô (Batch QR)
-        List<Booking> batch = bookingRepository.findAllByBatchToken(token);
-        if (!batch.isEmpty()) {
-            return batch.stream().map(this::mapToResponse).toList();
+        if (batch.isEmpty()) {
+            throw new RuntimeException("Mã QR không hợp lệ hoặc đã hết hạn");
         }
 
-        throw new RuntimeException("Mã QR không hợp lệ hoặc đã hết hạn");
+        // RBAC: manager chỉ thấy các đơn thuộc khoa mình. Admin: trả hết.
+        boolean isAdmin = authHelper.isAdmin();
+        String myUnitId = authHelper.getCurrentUnitId();
+        List<Booking> visible = isAdmin ? batch : batch.stream()
+                .filter(b -> {
+                    OrganizationUnit u = getEffectiveUnit(b);
+                    return u != null && myUnitId != null && myUnitId.equals(u.getId());
+                })
+                .toList();
+
+        if (visible.isEmpty()) {
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Lô đơn này không thuộc khoa của bạn — không thể trả đồ.");
+        }
+
+        return visible.stream().map(this::mapToResponse).toList();
     }
 
     @Transactional
@@ -1022,7 +1167,8 @@ public class BookingService {
                         booking.getSlot() != null ? booking.getSlot().getSlotName() : "",
                         damageInfo.getDescription() != null ? damageInfo.getDescription() : "");
                 penaltyService.createSystemPenalty(
-                        booking.getUser(), booking, "DAMAGE", damagePenaltyPoint, desc.trim());
+                        booking.getUser(), booking, "DAMAGE", damagePenaltyPoint, desc.trim(),
+                        damageInfo.getFineAmount());
             }
         }
     }

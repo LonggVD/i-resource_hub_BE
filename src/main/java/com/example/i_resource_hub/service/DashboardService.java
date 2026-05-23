@@ -42,7 +42,9 @@ public class DashboardService {
         long totalEquipment = resourceItemRepository.countByUnitScope(unitId);
         long availableEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "AVAILABLE");
         long inUseEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "IN_USE");
-        long brokenEquipment = resourceItemRepository.countByUnitScopeAndStatus(unitId, "BROKEN");
+        // Đếm cả status='DAMAGED' và conditionStatus='DAMAGED' để không bỏ sót item
+        // bị đánh dấu hỏng ở conditionStatus nhưng status vẫn AVAILABLE (data 2 trường lệch nhau).
+        long brokenEquipment = resourceItemRepository.countDamagedByUnitScope(unitId);
         long pendingBookings = bookingRepository.countByStatusAndUnitScope("PENDING", unitId);
 
         // 2. Biểu đồ trạng thái thiết bị

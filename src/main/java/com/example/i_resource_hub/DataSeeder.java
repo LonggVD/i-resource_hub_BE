@@ -187,6 +187,10 @@ public class DataSeeder implements CommandLineRunner {
             System.out.println("✅ Đã seed 5 TimeSlot + 3 Booking mẫu để test Kanban!");
         }
 
+        // ==========================================
+        // 5. SEED THÊM BOOKING ĐA DẠNG ĐỂ DEMO DASHBOARD
+        // ==========================================
+        seedBulkBookings();
 
         System.out.println("🚀 Khởi động Database hoàn tất!");
     }
@@ -400,6 +404,238 @@ public class DataSeeder implements CommandLineRunner {
                                 .unit(unit)
                                 .isAutoApprove(autoApprove)
                                 .build()));
+    }
+
+    /** Marker đặt trong booking đầu tiên do seeder tạo → check idempotent qua nhiều lần restart. */
+    private static final String BULK_SEED_PURPOSE_TAG = "[bulk-seed-v1]";
+
+    /**
+     * Seed thêm ~30 đơn mượn đa dạng để demo dashboard (RETURNED/OVERDUE/PENDING/APPROVED/CANCELLED/REJECTED).
+     * Không hardcode tên đơn vị: chia theo unit thật sự đang có trong DB. Idempotent qua marker tag.
+     */
+    private void seedBulkBookings() {
+        // Idempotent: nếu đã seed (qua marker tag) thì skip.
+        boolean alreadySeeded = bookingRepository.findAll().stream()
+                .anyMatch(b -> b.getPurpose() != null && b.getPurpose().contains(BULK_SEED_PURPOSE_TAG));
+        if (alreadySeeded) {
+            return;
+        }
+
+        List<TimeSlot> slots = timeSlotRepository.findAll();
+        if (slots.size() < 3) {
+            System.out.println("⚠️ seedBulkBookings: cần ít nhất 3 TimeSlot, đang có " + slots.size() + " — bỏ qua.");
+            return;
+        }
+
+        // Nhóm item theo unit hiệu lực (managedByUnit ưu tiên, fallback template.unit).
+        java.util.List<ResourceItem> allItems = resourceItemRepository.findAll();
+        java.util.Map<String, java.util.List<ResourceItem>> itemsByUnit = new java.util.LinkedHashMap<>();
+        for (ResourceItem it : allItems) {
+            OrganizationUnit unit = it.getManagedByUnit() != null
+                    ? it.getManagedByUnit()
+                    : (it.getTemplate() != null ? it.getTemplate().getUnit() : null);
+            if (unit == null) continue;
+            itemsByUnit.computeIfAbsent(unit.getId(), k -> new java.util.ArrayList<>()).add(it);
+        }
+        if (itemsByUnit.isEmpty()) {
+            System.out.println("⚠️ seedBulkBookings: không có item nào có unit — bỏ qua.");
+            return;
+        }
+
+        // Nhóm student theo unit. Coi là student nếu:
+        //  - Có role STUDENT, HOẶC
+        //  - Có studentCode và KHÔNG có role MANAGER/ADMIN (linh hoạt với data import sẵn).
+        java.util.List<User> allUsers = userRepository.findAll();
+        java.util.Map<String, java.util.List<User>> studentsByUnit = new java.util.LinkedHashMap<>();
+        java.util.List<User> allStudents = new java.util.ArrayList<>();
+        for (User u : allUsers) {
+            boolean hasStudentRole = u.getRoles() != null && u.getRoles().stream()
+                    .anyMatch(r -> "STUDENT".equalsIgnoreCase(r.getRoleCode()));
+            boolean hasMgrOrAdmin = u.getRoles() != null && u.getRoles().stream()
+                    .anyMatch(r -> "MANAGER".equalsIgnoreCase(r.getRoleCode())
+                            || "ADMIN".equalsIgnoreCase(r.getRoleCode()));
+            boolean hasStudentCode = u.getStudentCode() != null && !u.getStudentCode().isBlank()
+                    && !"ADMIN001".equalsIgnoreCase(u.getStudentCode());
+            boolean isStudent = hasStudentRole || (hasStudentCode && !hasMgrOrAdmin);
+            if (!isStudent) continue;
+            allStudents.add(u);
+            if (u.getUnit() != null) {
+                studentsByUnit.computeIfAbsent(u.getUnit().getId(), k -> new java.util.ArrayList<>()).add(u);
+            }
+        }
+        if (allStudents.isEmpty()) {
+            System.out.println("⚠️ seedBulkBookings: không có user STUDENT nào — bỏ qua.");
+            return;
+        }
+
+        // Manager mỗi unit (fallback: bất kỳ MANAGER/ADMIN).
+        java.util.Map<String, User> managerByUnit = new java.util.HashMap<>();
+        User anyManager = null;
+        for (User u : allUsers) {
+            boolean isMgrOrAdmin = u.getRoles() != null && u.getRoles().stream()
+                    .anyMatch(r -> "MANAGER".equalsIgnoreCase(r.getRoleCode())
+                            || "ADMIN".equalsIgnoreCase(r.getRoleCode()));
+            if (!isMgrOrAdmin) continue;
+            anyManager = anyManager != null ? anyManager : u;
+            if (u.getUnit() != null) {
+                managerByUnit.putIfAbsent(u.getUnit().getId(), u);
+            }
+        }
+
+        String[] purposes = {
+                "Thuyết trình môn Lập trình Web",
+                "Báo cáo đồ án cuối kỳ",
+                "Sinh hoạt CLB Tin học",
+                "Quay video bài tập nhóm",
+                "Workshop kỹ năng mềm",
+                "Demo sản phẩm khởi nghiệp",
+                "Buổi gặp mặt tân sinh viên",
+                "Phỏng vấn tuyển thành viên CLB",
+                "Hội thảo nghiên cứu khoa học",
+                "Báo cáo thực tập doanh nghiệp",
+                "Diễn tập hội thi học thuật",
+                "Quay clip phục vụ môn Marketing"
+        };
+
+        // Tập (item_id|date|slot_id) đã tồn tại để tránh đụng unique constraint.
+        java.util.Set<String> usedTriples = new java.util.HashSet<>();
+        for (Booking b : bookingRepository.findAll()) {
+            if (b.getResourceItem() != null && b.getSlot() != null) {
+                usedTriples.add(b.getResourceItem().getId() + "|"
+                        + b.getBookingDate() + "|" + b.getSlot().getId());
+            }
+        }
+
+        // Mỗi entry: [daysOffset, status, slotIdx, itemIdx, studentIdx]
+        // daysOffset âm = quá khứ, dương = tương lai
+        int[][] config = {
+                // RETURNED (12 đơn rải 6 ngày qua) → fill chart 7 ngày qua
+                {-6, 0, 0, 0, 0}, {-6, 1, 1, 1, 1}, {-6, 2, 2, 2, 2},
+                {-5, 0, 3, 3, 3}, {-5, 1, 0, 4, 4},
+                {-4, 1, 1, 5, 5},
+                {-3, 2, 2, 6, 6}, {-3, 3, 3, 7, 7},
+                {-2, 0, 0, 8, 8}, {-2, 1, 1, 9, 9},
+                {-1, 2, 2, 10, 0}, {-1, 3, 3, 11, 1},
+
+                // OVERDUE: status BORROWED, ngày + slot đã qua → fill "Cảnh báo quá hạn"
+                {-10, 5, 0, 12, 0},
+                {-8, 5, 1, 13, 1},
+                {-12, 5, 2, 14, 2},
+                {-7, 5, 0, 15, 3},
+                {-9, 5, 1, 16, 4},
+
+                // PENDING (hôm nay / tương lai gần) → fill Kanban + stat "Đơn Chờ Duyệt"
+                {1, 6, 0, 17, 5}, {1, 7, 1, 18, 6},
+                {2, 6, 2, 19, 7}, {2, 7, 3, 20, 8},
+                {3, 6, 0, 21, 9},
+
+                // APPROVED (tương lai, đã duyệt)
+                {1, 8, 2, 22, 0}, {2, 8, 3, 23, 1},
+                {3, 8, 0, 24, 2},
+
+                // CANCELLED & REJECTED quá khứ
+                {-2, 9, 1, 25, 3}, {-3, 9, 2, 26, 4}, {-1, 9, 3, 27, 5},
+                {-2, 10, 0, 28, 6}, {-4, 10, 1, 29, 7}
+        };
+
+        LocalDate today = LocalDate.now();
+        java.util.List<String> unitIds = new java.util.ArrayList<>(itemsByUnit.keySet());
+        int created = 0;
+        boolean markerAdded = false;
+
+        for (int idx = 0; idx < config.length; idx++) {
+            int[] c = config[idx];
+            int daysOffset = c[0];
+            int statusCode = c[1];
+            int slotIdx = c[2] % slots.size();
+
+            // Xoay vòng đều giữa các unit để mỗi khoa đều có booking
+            String unitId = unitIds.get(idx % unitIds.size());
+            java.util.List<ResourceItem> pool = itemsByUnit.get(unitId);
+            if (pool == null || pool.isEmpty()) continue;
+
+            // Student ưu tiên cùng unit, fallback bất kỳ
+            java.util.List<User> studsInUnit = studentsByUnit.getOrDefault(unitId, allStudents);
+            if (studsInUnit.isEmpty()) studsInUnit = allStudents;
+
+            ResourceItem item = pool.get(c[3] % pool.size());
+            User student = studsInUnit.get(c[4] % studsInUnit.size());
+            TimeSlot slot = slots.get(slotIdx);
+            LocalDate date = today.plusDays(daysOffset);
+            User mgr = managerByUnit.getOrDefault(unitId, anyManager);
+
+            String triple = item.getId() + "|" + date + "|" + slot.getId();
+            if (usedTriples.contains(triple)) continue;
+            usedTriples.add(triple);
+
+            String status;
+            switch (statusCode) {
+                case 0 -> status = "RETURNED";
+                case 5 -> status = "BORROWED";   // dùng làm OVERDUE
+                case 6, 7 -> status = "PENDING";
+                case 8 -> status = "APPROVED";
+                case 9 -> status = "CANCELLED";
+                case 10 -> status = "REJECTED";
+                default -> status = "PENDING";
+            }
+
+            String purpose = purposes[idx % purposes.length];
+            // Đặt marker vào purpose của booking đầu để check idempotent lần sau
+            if (!markerAdded) {
+                purpose = purpose + " " + BULK_SEED_PURPOSE_TAG;
+                markerAdded = true;
+            }
+
+            Booking.BookingBuilder b = Booking.builder()
+                    .user(student)
+                    .resourceItem(item)
+                    .managedByUnit(item.getManagedByUnit() != null
+                            ? item.getManagedByUnit()
+                            : (item.getTemplate() != null ? item.getTemplate().getUnit() : null))
+                    .slot(slot)
+                    .bookingDate(date)
+                    .status(status)
+                    .purpose(purpose)
+                    .qrCodeToken(UUID.randomUUID().toString());
+
+            LocalTime slotStart = slot.getStartTime();
+            LocalTime slotEnd = slot.getEndTime();
+
+            if ("RETURNED".equals(status)) {
+                b.approvedBy(mgr).approvedAt(date.atTime(slotStart).minusHours(2))
+                 .actualStartTime(date.atTime(slotStart).plusMinutes(5))
+                 .actualEndTime(date.atTime(slotEnd).minusMinutes(15));
+            } else if ("BORROWED".equals(status)) {
+                b.approvedBy(mgr).approvedAt(date.atTime(slotStart).minusHours(3))
+                 .actualStartTime(date.atTime(slotStart).plusMinutes(10));
+                if (!"IN_USE".equalsIgnoreCase(item.getStatus())) {
+                    item.setStatus("IN_USE");
+                    resourceItemRepository.save(item);
+                }
+            } else if ("APPROVED".equals(status)) {
+                b.approvedBy(mgr).approvedAt(java.time.LocalDateTime.now().minusHours(1));
+            } else if ("CANCELLED".equals(status)) {
+                b.cancelledAt(date.atTime(slotStart).minusHours(4))
+                 .cancelledReason("Sinh viên tự hủy do trùng lịch");
+            } else if ("REJECTED".equals(status)) {
+                b.approvedBy(mgr).approvedAt(date.atTime(slotStart).minusHours(5))
+                 .rejectedReason("Lý do mượn chưa hợp lệ, vui lòng bổ sung thông tin");
+            }
+
+            try {
+                bookingRepository.save(b.build());
+                created++;
+            } catch (Exception ex) {
+                // Roll back markerAdded nếu booking đầu tiên fail — để lần sau vẫn được seed
+                if (created == 0) markerAdded = false;
+                System.err.println("⚠️ Bỏ qua booking trùng/lỗi: " + ex.getMessage());
+            }
+        }
+
+        if (created > 0) {
+            System.out.println("✅ Đã seed thêm " + created + " booking mẫu (rải đều "
+                    + unitIds.size() + " unit, đa dạng status).");
+        }
     }
 
     private void ensureAdmin(Role adminRole, OrganizationUnit unit) {

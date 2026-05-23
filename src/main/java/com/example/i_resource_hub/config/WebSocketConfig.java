@@ -29,10 +29,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
-        // Broker đơn giản trong-process. Production có thể đổi sang RabbitMQ/Redis.
         registry.enableSimpleBroker("/queue", "/topic");
-        registry.setApplicationDestinationPrefixes("/app");
-        // Prefix cho user-specific destination (mặc định /user)
         registry.setUserDestinationPrefix("/user");
     }
 
@@ -49,7 +46,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        // JWT auth khi client gửi STOMP CONNECT
         registration.interceptors(stompAuthInterceptor);
     }
 }

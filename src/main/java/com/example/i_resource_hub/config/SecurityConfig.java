@@ -56,6 +56,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/files/**").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/ws/**").permitAll()
+                        // PayOS webhook không có JWT của user → bypass JWT, verify HMAC trong service
+                        .requestMatchers(HttpMethod.POST, "/api/payments/webhook").permitAll()
                         .anyRequest().authenticated()
                 );
 

@@ -15,4 +15,7 @@ public class EvidenceRequest {
     private String imageUrl;
 
     private String description;
+
+    /** Số tiền bồi thường giáo vụ ghi nhận khi báo DAMAGE — tuỳ chọn. */
+    private Long fineAmount;
 }
